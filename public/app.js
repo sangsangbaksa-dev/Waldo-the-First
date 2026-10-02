@@ -35,7 +35,7 @@ async function api(method, path, body, extraHeaders = {}) {
     body: body === undefined ? undefined : isBinary ? body : JSON.stringify(body),
   });
   const data = res.headers.get('content-type')?.includes('json') ? await res.json() : null;
-  if (res.status === 401 && path !== '/api/me') {
+  if (res.status === 401 && path.startsWith('/api/') && path !== '/api/me/password') {
     location.reload();
     throw new Error('로그인이 필요해.');
   }
@@ -160,11 +160,8 @@ const activeConversation = () =>
 
 async function boot() {
   state.config = await api('GET', '/api/config');
-  const error = new URLSearchParams(location.search).get('error');
-  if (error) history.replaceState(null, '', '/');
-
   const { user: me } = await api('GET', '/api/session');
-  if (!me) return showLogin(error);
+  if (!me) return showLogin();
 
   state.me = me;
   $('#app').hidden = false;
@@ -181,21 +178,65 @@ async function boot() {
   window.addEventListener('hashchange', route);
 }
 
-function showLogin(error) {
+function showLogin() {
   $('#login').hidden = false;
-  $('#google-login').hidden = !state.config.google;
-  $('#google-missing').hidden = state.config.google;
-  $('#dev-login').hidden = !state.config.devLogin;
-  if (error) $('#login-error').textContent = error;
+  const error = $('#login-error');
+  const tabs = document.querySelectorAll('.login-tabs [data-tab]');
+  const show = (tab) => {
+    for (const t of tabs) t.classList.toggle('on', t.dataset.tab === tab);
+    $('#signin-form').hidden = tab !== 'signin';
+    $('#signup-form').hidden = tab !== 'signup';
+    error.textContent = '';
+    $(`#${tab}-form input`).focus();
+  };
+  for (const t of tabs) t.addEventListener('click', () => show(t.dataset.tab));
 
-  $('#dev-login').addEventListener('submit', async (event) => {
+  const busy = (form, on) => {
+    form.querySelector('[type=submit]').disabled = on;
+  };
+
+  // 로그인: Supabase에 직접 이메일·비밀번호를 보내 토큰을 받고, 그 토큰으로 이 사이트의 세션을 연다.
+  $('#signin-form').addEventListener('submit', async (event) => {
     event.preventDefault();
     const form = new FormData(event.target);
+    error.textContent = '';
+    busy(event.target, true);
     try {
-      await api('POST', '/auth/dev', { email: form.get('email'), name: form.get('name') });
+      const { url, anonKey } = state.config.supabase;
+      const res = await fetch(`${url}/auth/v1/token?grant_type=password`, {
+        method: 'POST',
+        headers: { apikey: anonKey, 'content-type': 'application/json' },
+        body: JSON.stringify({ email: String(form.get('email')).trim(), password: form.get('password') }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        if (res.status === 429) throw new Error('로그인 시도가 너무 많아. 잠시 뒤에 다시 해 줘.');
+        if (data.error_code === 'invalid_credentials' || res.status === 400) throw new Error('이메일 또는 비밀번호가 맞지 않아.');
+        throw new Error('로그인 서버에 연결하지 못했어.');
+      }
+      await api('POST', '/auth/session', { accessToken: data.access_token });
       location.reload();
     } catch (err) {
-      $('#login-error').textContent = err.message;
+      error.textContent = err.message === 'Failed to fetch' ? '로그인 서버에 연결하지 못했어.' : err.message;
+      busy(event.target, false);
+    }
+  });
+
+  $('#signup-form').addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const form = new FormData(event.target);
+    error.textContent = '';
+    if (form.get('password') !== form.get('confirm')) {
+      error.textContent = '비밀번호 확인이 달라.';
+      return;
+    }
+    busy(event.target, true);
+    try {
+      await api('POST', '/auth/signup', { name: form.get('name'), email: form.get('email'), password: form.get('password') });
+      location.reload();
+    } catch (err) {
+      error.textContent = err.message;
+      busy(event.target, false);
     }
   });
 }
@@ -337,11 +378,44 @@ function openAccountMenu(anchor) {
       localStorage.setItem('chat:notify', state.notify ? 'on' : 'off');
       toast(state.notify ? '알림을 켰어.' : '알림을 껐어.');
     }),
+    menuItem('👤 이름 바꾸기', () => { closePopover(); openProfile(); }),
+    menuItem('🔑 비밀번호 바꾸기', () => { closePopover(); openPassword(); }),
     menuItem('↪ 로그아웃', run(async () => {
       await api('POST', '/auth/logout');
       location.href = '/';
     })),
   ], { align: 'right' });
+}
+
+function openProfile() {
+  const input = h('input', { maxlength: 40, value: state.me.name, required: true, autocomplete: 'name' });
+  openDialog('이름 바꾸기', [h('label', {}, '이름(실명)', input)], {
+    submitLabel: '저장',
+    onSubmit: async () => {
+      state.me = { ...state.me, ...(await api('PATCH', '/api/me', { name: input.value })) };
+      renderTopbar();
+      toast('이름을 바꿨어.');
+    },
+  });
+}
+
+function openPassword() {
+  const current = h('input', { type: 'password', autocomplete: 'current-password', required: true });
+  const next = h('input', { type: 'password', autocomplete: 'new-password', minlength: 8, required: true, placeholder: '8자 이상' });
+  const confirm = h('input', { type: 'password', autocomplete: 'new-password', minlength: 8, required: true });
+  openDialog('비밀번호 바꾸기', [
+    h('label', {}, '지금 비밀번호', current),
+    h('label', {}, '새 비밀번호', next),
+    h('label', {}, '새 비밀번호 확인', confirm),
+    h('p', { class: 'muted' }, '바꾸면 다른 기기에서는 로그아웃돼.'),
+  ], {
+    submitLabel: '바꾸기',
+    onSubmit: async () => {
+      if (next.value !== confirm.value) throw new Error('새 비밀번호 확인이 달라.');
+      await api('POST', '/api/me/password', { currentPassword: current.value, newPassword: next.value });
+      toast('비밀번호를 바꿨어.');
+    },
+  });
 }
 
 // ───────────── 팝오버 / 메뉴 / 대화상자 ─────────────
@@ -495,7 +569,7 @@ function openNewMenu(anchor) {
 function openNewChat() {
   const picker = peoplePicker({ exclude: [state.me.id] });
   openDialog('새 채팅', [
-    h('p', { class: 'muted' }, '한 명을 고르면 1:1 채팅, 여러 명을 고르면 그룹 채팅이 돼. 아직 가입 안 한 사람은 Gmail 주소로 초대할 수 있어.'),
+    h('p', { class: 'muted' }, '한 명을 고르면 1:1 채팅, 여러 명을 고르면 그룹 채팅이 돼. 아직 가입 안 한 사람은 이메일 주소로 초대할 수 있어.'),
     picker.element,
   ], {
     submitLabel: '채팅 시작',
@@ -720,7 +794,7 @@ function memberSummary(conversation) {
     const presence = presenceOf(other.id);
     const parts = [STATUS_LABEL[presence]];
     if (other.statusText) parts.push(other.statusText);
-    if (!other.registered) parts.push('아직 가입하지 않음 — 로그인하면 메시지를 볼 수 있어');
+    if (!other.registered) parts.push('아직 가입하지 않음 — 이 이메일로 가입하면 메시지를 볼 수 있어');
     return parts.join(' · ');
   }
   return `멤버 ${conversation.members.length}명${conversation.kind === 'space' && conversation.description ? ` · ${conversation.description}` : ''}`;
@@ -811,7 +885,7 @@ function openSpaceSettings(conversation) {
 function openMembers(conversationId) {
   const conversation = state.conversations.get(conversationId);
   const canManage = conversation.kind === 'space' && conversation.role === 'manager';
-  const picker = peoplePicker({ placeholder: '추가할 사람의 이름 또는 Gmail', exclude: conversation.members.map((m) => m.id) });
+  const picker = peoplePicker({ placeholder: '추가할 사람의 이름 또는 이메일', exclude: conversation.members.map((m) => m.id) });
   const list = h('ul', { class: 'member-list' }, conversation.members.map((m) => h('li', {},
     avatar(m, 36),
     h('div', { class: 'who' },

@@ -162,6 +162,12 @@ input:focus, select:focus, textarea:focus { border-color: var(--primary); box-sh
 .group-avatar > .avatar:last-child { right: 0; bottom: 0; outline: 2px solid var(--bg); border-radius: 50%; }
 
 /* ───── 로그인 ───── */
+.login-tabs { align-self: center; }
+.auth-form { display: flex; flex-direction: column; gap: 12px; text-align: left; }
+.auth-form label { display: flex; flex-direction: column; gap: 6px; font-size: 13px; color: var(--muted); }
+.auth-form label input { color: var(--text); font-size: 14px; }
+.auth-form .btn { margin-top: 4px; padding: 11px 20px; }
+.small { font-size: 12px; margin: 0; text-align: center; }
 .login { min-height: 100%; display: grid; place-items: center; padding: 16px; }
 .login-card {
   width: 100%;
@@ -176,24 +182,6 @@ input:focus, select:focus, textarea:focus { border-color: var(--primary); box-sh
 }
 .login-logo { width: 56px; height: 56px; margin: 0 auto; }
 .login-card h1 { font-size: 26px; }
-.google-btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 12px;
-  padding: 11px 20px;
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  background: var(--surface);
-  color: var(--text);
-  text-decoration: none;
-  font-weight: 500;
-}
-.google-btn:hover { background: var(--hover); }
-.hint { font-size: 13px; color: var(--muted); background: var(--surface-2); border-radius: 12px; padding: 10px 12px; margin: 0; }
-.dev-login { display: flex; flex-direction: column; gap: 10px; }
-.divider { display: flex; align-items: center; gap: 10px; color: var(--muted); font-size: 12px; }
-.divider::before, .divider::after { content: ""; flex: 1; border-top: 1px solid var(--border); }
 
 /* ───── 앱 뼈대 ───── */
 .app {

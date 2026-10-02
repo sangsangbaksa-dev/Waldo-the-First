@@ -2,22 +2,25 @@
   "name": "waldo-chat",
   "version": "0.1.0",
   "private": true,
-  "description": "구글 계정으로 로그인하는 팀 채팅 웹사이트",
+  "description": "Supabase로 계정과 데이터를 관리하는 팀 채팅 웹사이트",
   "type": "module",
   "main": "src/index.js",
   "scripts": {
-    "start": "node --no-warnings=ExperimentalWarning --env-file-if-exists=.env src/index.js",
-    "dev": "node --no-warnings=ExperimentalWarning --env-file-if-exists=.env --watch src/index.js",
-    "test": "node --no-warnings=ExperimentalWarning --test test/*.test.js"
+    "start": "node --env-file-if-exists=.env src/index.js",
+    "dev": "node --env-file-if-exists=.env --watch src/index.js",
+    "test": "node --test test/*.test.js"
   },
   "engines": {
-    "node": ">=22.13"
+    "node": ">=22.9"
   },
   "dependencies": {
+    "@supabase/supabase-js": "^2.117.2",
     "express": "^5.2.1",
+    "pg": "^8.23.1",
     "socket.io": "^4.8.4"
   },
   "devDependencies": {
+    "@electric-sql/pglite": "^0.5.8",
     "socket.io-client": "^4.8.4"
   }
 }

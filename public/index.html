@@ -8,23 +8,31 @@
   <link rel="stylesheet" href="/style.css">
 </head>
 <body>
-  <!-- 로그인 -->
+  <!-- 로그인 / 가입 -->
   <main id="login" class="login" hidden>
     <div class="login-card">
       <img src="/icon.svg" alt="" class="login-logo">
       <h1>Waldo Chat</h1>
-      <p class="muted">구글 계정(Gmail)으로 로그인하고 바로 대화를 시작해.</p>
-      <a id="google-login" class="google-btn" href="/auth/google" hidden>
-        <svg viewBox="0 0 48 48" width="20" height="20" aria-hidden="true"><path fill="#EA4335" d="M24 9.5c3.5 0 6.6 1.2 9.1 3.6l6.8-6.8C35.8 2.4 30.3 0 24 0 14.6 0 6.6 5.4 2.7 13.3l7.9 6.1C12.5 13.6 17.8 9.5 24 9.5z"/><path fill="#4285F4" d="M46.1 24.5c0-1.6-.1-3.1-.4-4.5H24v9h12.4c-.5 2.9-2.2 5.3-4.6 6.9l7.4 5.7c4.3-4 6.9-9.9 6.9-17.1z"/><path fill="#FBBC05" d="M10.6 28.6c-.5-1.4-.8-3-.8-4.6s.3-3.2.8-4.6l-7.9-6.1C1 16.6 0 20.2 0 24s1 7.4 2.7 10.7l7.9-6.1z"/><path fill="#34A853" d="M24 48c6.5 0 11.9-2.1 15.9-5.8l-7.4-5.7c-2.1 1.4-4.8 2.3-8.5 2.3-6.2 0-11.5-4.1-13.4-9.9l-7.9 6.1C6.6 42.6 14.6 48 24 48z"/></svg>
-        Google 계정으로 로그인
-      </a>
-      <p id="google-missing" class="hint" hidden>구글 로그인을 쓰려면 서버에 <code>GOOGLE_CLIENT_ID</code>, <code>GOOGLE_CLIENT_SECRET</code>을 넣어 줘. README에 방법이 있어.</p>
-      <form id="dev-login" class="dev-login" hidden>
-        <div class="divider"><span>개발용 로그인</span></div>
-        <input name="email" type="email" placeholder="이메일" required>
-        <input name="name" placeholder="이름" required maxlength="80">
-        <button class="btn" type="submit">들어가기</button>
+      <div class="segmented login-tabs" role="tablist">
+        <button type="button" role="tab" data-tab="signin" class="on">로그인</button>
+        <button type="button" role="tab" data-tab="signup">계정 만들기</button>
+      </div>
+
+      <form id="signin-form" class="auth-form">
+        <label>이메일<input name="email" type="email" autocomplete="email" required></label>
+        <label>비밀번호<input name="password" type="password" autocomplete="current-password" required></label>
+        <button class="btn" type="submit">로그인</button>
       </form>
+
+      <form id="signup-form" class="auth-form" hidden>
+        <label>이름(실명)<input name="name" autocomplete="name" maxlength="40" required placeholder="예: 김월도"></label>
+        <label>이메일<input name="email" type="email" autocomplete="email" required></label>
+        <label>비밀번호<input name="password" type="password" autocomplete="new-password" minlength="8" required placeholder="8자 이상"></label>
+        <label>비밀번호 확인<input name="confirm" type="password" autocomplete="new-password" minlength="8" required></label>
+        <button class="btn" type="submit">계정 만들기</button>
+        <p class="muted small">인증 메일이나 승인 없이 바로 쓸 수 있어. 다른 사람에게는 이 이름으로 보여.</p>
+      </form>
+
       <p id="login-error" class="error" role="alert"></p>
     </div>
   </main>
