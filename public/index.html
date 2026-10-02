@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Waldo Chat</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 100 100%27%3E%3Ctext y=%27.9em%27 font-size=%2790%27%3E💬%3C/text%3E%3C/svg%3E">
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <!-- 입장 화면 -->
+  <main id="login" class="login">
+    <form id="login-form" class="card" autocomplete="off">
+      <h1>Waldo Chat</h1>
+      <p class="muted">닉네임을 정하고 방을 골라서 들어와.</p>
+      <label for="nickname">닉네임</label>
+      <input id="nickname" name="nickname" maxlength="20" required autofocus>
+      <label for="room-select">방</label>
+      <select id="room-select" name="room"></select>
+      <label for="new-room">또는 새 방 만들기</label>
+      <input id="new-room" name="newRoom" maxlength="30" placeholder="새 방 이름 (비워 두면 위에서 고른 방)">
+      <p id="login-error" class="error" role="alert"></p>
+      <button type="submit">들어가기</button>
+    </form>
+  </main>
+
+  <!-- 채팅 화면 -->
+  <div id="chat" class="chat" hidden>
+    <aside class="sidebar">
+      <header class="sidebar-head">
+        <strong>Waldo Chat</strong>
+        <span id="me" class="muted"></span>
+      </header>
+      <section>
+        <h2>방</h2>
+        <ul id="room-list" class="list"></ul>
+        <form id="room-form" class="inline" autocomplete="off">
+          <input id="room-input" maxlength="30" placeholder="새 방 이름">
+          <button type="submit" aria-label="방 만들기">+</button>
+        </form>
+      </section>
+      <section>
+        <h2>접속자 <span id="user-count" class="muted"></span></h2>
+        <ul id="user-list" class="list"></ul>
+      </section>
+      <button id="logout" class="ghost">나가기</button>
+    </aside>
+
+    <section class="room">
+      <header class="room-head">
+        <button id="menu" class="ghost menu" aria-label="메뉴">☰</button>
+        <h1 id="room-title"></h1>
+        <span id="status" class="status" title="연결 상태"></span>
+      </header>
+      <ol id="messages" class="messages" aria-live="polite"></ol>
+      <p id="typing" class="typing muted"></p>
+      <form id="message-form" class="composer" autocomplete="off">
+        <textarea id="message-input" rows="1" maxlength="500" placeholder="메시지를 입력해 (Enter 보내기, Shift+Enter 줄바꿈)"></textarea>
+        <button type="submit">보내기</button>
+      </form>
+      <p id="chat-error" class="error" role="alert"></p>
+    </section>
+  </div>
+
+  <script src="/socket.io/socket.io.js"></script>
+  <script src="/app.js" type="module"></script>
+</body>
+</html>

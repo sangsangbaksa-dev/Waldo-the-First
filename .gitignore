@@ -1,24 +1,5 @@
-# macOS
-.DS_Store
-
-# editors
-.idea/
-.vscode/
-*.swp
-
-# Node
 node_modules/
-dist/
-.next/
-.turbo/
-
-# Python
-__pycache__/
-.venv/
-.pytest_cache/
-*.pyc
-
-# env
+.DS_Store
 .env
 .env.*
 !.env.example

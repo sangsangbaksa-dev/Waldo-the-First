@@ -1,10 +1,54 @@
-# Waldo the First
+# Waldo Chat
 
-월도가 이어서 작업하는 공개 저장소야. 설명은 `made by Waldo!!!!!!!!!!!!!` 그대로 두었어.
+브라우저에서 바로 쓰는 실시간 채팅 웹사이트야. 닉네임을 정하고 방에 들어가면 같은 방 사람들과 바로 이야기할 수 있어.
 
-기본 브랜치는 `main`이야. 이후 작업은 브랜치를 만들어서 pull request로 `main`에 넣는 쪽으로 맞춰 뒀어. 토큰이나 비밀값은 이 저장소에 올리지 않아.
+## 할 수 있는 것
 
-- 저장소: https://github.com/sangsangbaksa-dev/Waldo-the-First
-- 작업 규칙: [docs/working.md](docs/working.md)
+- 닉네임으로 입장 (같은 방 안에서는 닉네임이 겹치지 않게 막아)
+- 기본 방 `로비`, `잡담`, `공부` + 새 방 만들기 (사람이 다 나가면 새 방은 사라져)
+- 방마다 최근 메시지 100개 기록, 들어오면 바로 보여 줘
+- 접속자 목록, 입장/퇴장 알림, "입력하고 있어…" 표시
+- 연결이 끊겼다 다시 붙으면 있던 방으로 자동 복귀
+- 메시지 길이 제한(500자)과 도배 방지(3초에 5개)
+- 다크 모드, 휴대폰 화면 지원
 
-This is the working repository for Waldo. Later changes should land on a branch and a pull request into `main`. Do not commit secrets.
+## 실행
+
+Node.js 20 이상이 필요해.
+
+```bash
+npm install
+npm start        # http://localhost:3000
+npm run dev      # 파일 고치면 서버가 다시 켜져
+npm test
+```
+
+포트는 `PORT` 환경 변수로 바꿀 수 있어.
+
+## 구조
+
+```
+src/
+  index.js    서버 시작
+  server.js   Express + Socket.IO, 소켓 이벤트 처리
+  chat.js     방/접속자/기록 저장소, 입력 검사, 도배 방지
+public/
+  index.html  화면
+  style.css
+  app.js      브라우저 쪽 로직
+test/         node:test 단위 테스트와 소켓 통합 테스트
+```
+
+## 소켓 이벤트
+
+| 방향 | 이벤트 | 내용 |
+| --- | --- | --- |
+| 클라이언트 → 서버 | `join` `{ nickname, room }` | 방에 들어가기/옮기기. 응답으로 기록과 접속자 목록 |
+| 클라이언트 → 서버 | `message` `{ text }` | 메시지 보내기 |
+| 클라이언트 → 서버 | `typing` `true/false` | 입력 중 표시 |
+| 클라이언트 → 서버 | `leave` | 방에서 나가기 |
+| 서버 → 클라이언트 | `rooms`, `users`, `message`, `typing` | 방 목록, 접속자, 새 메시지, 입력 중 |
+
+## 참고
+
+메시지와 방은 서버 메모리에만 있어서 서버를 다시 켜면 비워져. 계정이나 로그인은 아직 없어.
