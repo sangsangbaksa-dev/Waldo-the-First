@@ -1,9 +1,14 @@
 // Vercel이 이 파일을 Express 앱으로 띄운다(export default app).
-// 테이블과 Storage 버킷은 미리 만들어져 있어야 한다: 내 컴퓨터에서 `npm start`를 한 번 하거나 supabase/*.sql을 실행.
+// Vercel은 express를 직접 import하는 파일만 진입점으로 알아보므로 여기서 감싼다.
+// 테이블과 Storage 버킷, 실시간 권한은 미리 만들어져 있어야 한다(README의 "처음 설정하기").
+import express from 'express';
 import { createChatApp } from './create-app.js';
 import { createRuntime, loadEnvFile } from './runtime.js';
 
 loadEnvFile();
-const runtime = createRuntime();
 
-export default createChatApp(runtime);
+const app = express();
+app.disable('x-powered-by');
+app.use(createChatApp(createRuntime()));
+
+export default app;
