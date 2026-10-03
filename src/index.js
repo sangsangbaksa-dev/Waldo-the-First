@@ -1,10 +1,23 @@
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
+import { parseEnv } from 'node:util';
 import pg from 'pg';
 import { databaseOptions, explainDbError } from './database-config.js';
 import { createDb, pgAdapter } from './db.js';
 import { createChatServer, MAX_UPLOAD } from './server.js';
 import { ChatService } from './service.js';
 import { SupabaseGateway } from './supabase.js';
+
+// .env를 읽는다. Node의 --env-file은 컴퓨터에 이미 같은 이름의 환경 변수가 있으면 .env 값을 무시해서,
+// 예전에 다른 프로그램이 넣어 둔 DATABASE_URL 같은 값 때문에 헷갈리는 일이 생긴다. 여기서는 .env가 이긴다.
+const envFile = new URL('../.env', import.meta.url);
+if (existsSync(envFile)) {
+  for (const [key, value] of Object.entries(parseEnv(readFileSync(envFile, 'utf8').replace(/^\uFEFF/, '')))) {
+    if (process.env[key] && process.env[key] !== value) {
+      console.warn(`알림: 컴퓨터에 이미 ${key} 환경 변수가 있어서 .env 값으로 바꿔 썼어.`);
+    }
+    process.env[key] = value;
+  }
+}
 
 function required(name) {
   const value = process.env[name];
@@ -41,7 +54,12 @@ if (database.error) {
   console.error(`DB 설정 문제: ${database.error}`);
   process.exit(1);
 }
-const pool = new pg.Pool({ ...database.options, ssl, max: Number(process.env.DATABASE_POOL_SIZE) || 10 });
+const pool = new pg.Pool({
+  ...database.options,
+  ssl,
+  max: Number(process.env.DATABASE_POOL_SIZE) || 10,
+  connectionTimeoutMillis: 15000, // 연결이 막혀 있으면 멈춰 있지 말고 15초 뒤 알려 준다
+});
 pool.on('error', (error) => console.error('DB 연결 오류:', error.message));
 
 const db = createDb(pgAdapter(pool));

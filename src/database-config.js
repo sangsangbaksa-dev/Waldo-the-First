@@ -63,7 +63,7 @@ export function explainDbError(error) {
   if (error.code === 'ENOTFOUND' || error.code === 'EAI_AGAIN') {
     return 'DB 서버 주소를 찾을 수 없어. DATABASE_HOST 철자를 확인하고 인터넷 연결을 확인해.';
   }
-  if (['ECONNREFUSED', 'ETIMEDOUT', 'ECONNRESET', 'ENETUNREACH'].includes(error.code)) {
+  if (['ECONNREFUSED', 'ETIMEDOUT', 'ECONNRESET', 'ENETUNREACH'].includes(error.code) || /timeout/i.test(text)) {
     return 'DB 서버에 연결할 수 없어. 포트(5432)가 맞는지, 학교·회사 네트워크가 막고 있지 않은지 확인해.';
   }
   return null;
