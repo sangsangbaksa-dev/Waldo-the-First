@@ -23,6 +23,22 @@ function h(tag, attrs = {}, ...children) {
   return el;
 }
 
+const ICONS = {
+  plus: '<path d="M12 5v14M5 12h14"/>',
+  send: '<path d="M4 12 20 4l-4 16-4-7-8-1Z" fill="currentColor" stroke="none"/>',
+  smile: '<circle cx="12" cy="12" r="9"/><path d="M8.5 14.5c.9 1.2 2.1 1.8 3.5 1.8s2.6-.6 3.5-1.8"/><circle cx="9" cy="10" r="1" fill="currentColor" stroke="none"/><circle cx="15" cy="10" r="1" fill="currentColor" stroke="none"/>',
+  format: '<path d="M7 16 12 4l5 12M8.6 12h6.8M5 20h14"/>',
+  upload: '<path d="M12 16V5M7 10l5-5 5 5M5 19h14"/>',
+  down: '<path d="M12 5v14M6 13l6 6 6-6"/>',
+};
+
+/** 고정된 SVG 아이콘(외부 입력이 들어가지 않는다). */
+function icon(name, size = 20) {
+  const span = h('span', { class: 'svg-icon', 'aria-hidden': 'true' });
+  span.innerHTML = `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${ICONS[name]}</svg>`;
+  return span;
+}
+
 async function api(method, path, body) {
   const res = await fetch(path, {
     method,
@@ -101,6 +117,26 @@ function groupAvatar(conversation, size = 32) {
 const dayFormat = new Intl.DateTimeFormat('ko-KR', { month: 'long', day: 'numeric', weekday: 'short' });
 const timeFormat = new Intl.DateTimeFormat('ko-KR', { hour: 'numeric', minute: '2-digit' });
 const fullFormat = new Intl.DateTimeFormat('ko-KR', { dateStyle: 'medium', timeStyle: 'short' });
+const dividerFormat = new Intl.DateTimeFormat('ko-KR', { month: 'long', day: 'numeric', weekday: 'long' });
+const monthDayFormat = new Intl.DateTimeFormat('ko-KR', { month: 'long', day: 'numeric' });
+const yearDayFormat = new Intl.DateTimeFormat('ko-KR', { year: 'numeric', month: 'long', day: 'numeric' });
+
+/** 날짜 구분선: "오늘", "어제", "9월 26일 토요일" */
+function dividerLabel(ms) {
+  const label = dayLabel(ms);
+  if (label === '오늘' || label === '어제') return label;
+  const d = new Date(ms);
+  return d.getFullYear() === new Date().getFullYear() ? dividerFormat.format(d) : `${d.getFullYear()}년 ${dividerFormat.format(d)}`;
+}
+
+/** 말풍선 위 시간: 오늘은 "오후 8:52", 그 전은 "9월 24일, 오후 8:52" */
+function stampLabel(ms) {
+  const d = new Date(ms);
+  const now = new Date();
+  if (d.toDateString() === now.toDateString()) return timeFormat.format(d);
+  const day = d.getFullYear() === now.getFullYear() ? monthDayFormat.format(d) : yearDayFormat.format(d);
+  return `${day}, ${timeFormat.format(d)}`;
+}
 
 function dayLabel(ms) {
   const d = new Date(ms);
@@ -1098,19 +1134,27 @@ async function openConversation(id) {
   const main = $('#main');
   const list = h('ol', { class: 'messages', id: 'message-list', 'aria-live': 'polite' });
   const scroller = h('div', { class: 'scroller', id: 'scroller' }, list);
+  const jump = h('button', { class: 'jump-btn', type: 'button', hidden: true, onclick: () => scroller.scrollTo({ top: scroller.scrollHeight, behavior: 'smooth' }) },
+    icon('down', 18), '아래로 이동');
   main.replaceChildren(
     h('header', { class: 'conv-head' }),
     h('div', { id: 'pin-banner' }),
-    scroller,
+    h('div', { class: 'scroll-wrap' }, scroller, jump),
     h('div', { class: 'typing-line', id: 'typing-main' }),
     composer({ conversationId: id, threadId: null }),
   );
   renderConversationHeader(conversation);
   updateTitle();
 
+  // 맨 아래를 보고 있었다면 사진이 늦게 뜨더라도 맨 아래에 붙어 있게 한다.
+  let stick = true;
   scroller.addEventListener('scroll', () => {
     if (scroller.scrollTop < 200) loadOlder(id);
+    const distance = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight;
+    stick = distance < 120;
+    jump.hidden = distance < 200;
   });
+  list.addEventListener('load', () => { if (stick) scroller.scrollTop = scroller.scrollHeight; }, true);
 
   if (!state.messages.has(id)) {
     list.append(h('li', { class: 'loading' }, '불러오는 중…'));
@@ -1171,7 +1215,7 @@ function renderMessages(id) {
   let prev = null;
   for (const message of store.list) {
     if (!prev || new Date(prev.createdAt).toDateString() !== new Date(message.createdAt).toDateString()) {
-      items.push(h('li', { class: 'day-sep' }, h('span', {}, dayLabel(message.createdAt))));
+      items.push(h('li', { class: 'day-sep' }, h('span', {}, dividerLabel(message.createdAt))));
       prev = null;
     }
     items.push(messageItem(message, { compact: continues(prev, message), inThread: false }));
@@ -1225,11 +1269,14 @@ function messageItem(message, { compact = false, inThread = false } = {}) {
       h('span', { class: 'quote-body' }, message.quote.deleted ? '삭제된 메시지예요.' : (plainText(message.quote.body) || `📎 파일 ${message.quote.files}개`)))
     : null;
 
+  const images = message.attachments.filter((a) => a.mime.startsWith('image/') && a.mime !== 'image/svg+xml');
+  const files = message.attachments.filter((a) => !images.includes(a));
   const attachments = message.attachments.length
-    ? h('div', { class: 'attachments' }, message.attachments.map((a) => (a.mime.startsWith('image/') && a.mime !== 'image/svg+xml'
-      ? h('a', { href: a.url, target: '_blank', rel: 'noopener', class: 'att-image' }, h('img', { src: a.url, alt: a.filename, loading: 'lazy' }))
-      : h('a', { href: a.url, class: 'att-file', onclick: (event) => { event.preventDefault(); downloadFile(a); } },
-        h('span', { class: 'att-icon' }, '📄'), h('span', { class: 'who' }, h('strong', {}, a.filename), h('span', { class: 'muted' }, fileSize(a.size)))))))
+    ? h('div', { class: 'attachments' },
+      images.length ? h('div', { class: `att-images n${Math.min(images.length, 4)}` }, images.map((a) => h('a', { href: a.url, target: '_blank', rel: 'noopener', class: 'att-image', title: a.filename },
+        h('img', { src: a.url, alt: a.filename, loading: 'lazy' })))) : null,
+      files.map((a) => h('a', { href: a.url, class: 'att-file', onclick: (event) => { event.preventDefault(); downloadFile(a); } },
+        h('span', { class: 'att-icon' }, '📄'), h('span', { class: 'who' }, h('strong', {}, a.filename), h('span', { class: 'muted' }, fileSize(a.size))))))
     : null;
 
   const reactions = message.reactions.length
@@ -1270,17 +1317,21 @@ function messageItem(message, { compact = false, inThread = false } = {}) {
       }, { danger: true }) : null,
     ].filter(Boolean), { align: 'right' }) }, '⋮'));
 
+  // 글이 없고 파일만 있으면 말풍선은 그리지 않는다.
+  const hasText = message.deleted || message.body.trim() || quote;
+  const bubble = h('div', { class: `bubble msg-content${hasText ? '' : ' empty'}` },
+    quote, body, message.editedAt && !message.deleted ? h('span', { class: 'edited' }, '수정됨') : null);
+  const stamp = h('span', { class: 'muted stamp', title: fullFormat.format(message.createdAt) }, stampLabel(message.createdAt));
+  const pin = message.pinned ? h('span', { class: 'pin-mark', title: '고정된 메시지' }, '📌') : null;
+
   return h('li', { class: `msg${compact ? ' compact' : ''}${mine ? ' mine' : ''}`, dataset: { id: message.id } },
-    compact ? h('span', { class: 'msg-gutter muted', title: fullFormat.format(message.createdAt) }, timeFormat.format(message.createdAt)) : avatar(message.author, 36),
+    mine ? null : h('div', { class: 'msg-side' }, compact ? null : avatar(message.author, 36)),
     h('div', { class: 'msg-main' },
-      compact ? null : h('div', { class: 'msg-head' },
-        h('strong', {}, message.author?.name ?? '알 수 없음'),
-        h('span', { class: 'muted', title: fullFormat.format(message.createdAt) }, timeFormat.format(message.createdAt)),
-        message.pinned ? h('span', { class: 'pin-mark', title: '고정된 메시지' }, '📌') : null),
-      compact && message.pinned ? h('span', { class: 'pin-mark', title: '고정된 메시지' }, '📌') : null,
+      compact
+        ? (pin ? h('div', { class: 'msg-head' }, pin) : null)
+        : h('div', { class: 'msg-head' }, mine ? null : h('strong', {}, message.author?.name ?? '알 수 없음'), stamp, pin),
       forwarded,
-      quote,
-      h('div', { class: 'msg-content' }, body, message.editedAt && !message.deleted ? h('span', { class: 'muted edited' }, '(수정됨)') : null),
+      bubble,
       attachments, reactions, replies),
     toolbar);
 }
@@ -1482,7 +1533,7 @@ function composer({ conversationId, threadId }) {
   const fileInput = h('input', { type: 'file', multiple: true, hidden: true });
   const tray = h('div', { class: 'attach-tray' });
   const suggest = h('ul', { class: 'mention-suggest', hidden: true });
-  const sendBtn = h('button', { class: 'send-btn', type: 'submit', title: '보내기', disabled: true }, '➤');
+  const sendBtn = h('button', { class: 'send-btn', type: 'submit', title: '보내기', 'aria-label': '보내기', disabled: true }, icon('send', 20));
   let quoting = null;
   const quoteBar = h('div', { class: 'quote-bar', hidden: true });
   const setQuote = (message) => {
@@ -1672,25 +1723,26 @@ function composer({ conversationId, threadId }) {
 
   const form = h('form', { class: 'composer', onsubmit: (event) => { event.preventDefault(); send(); } },
     suggest,
+    h('button', { type: 'button', class: 'composer-plus', title: '파일 첨부', 'aria-label': '파일 첨부', onclick: () => fileInput.click() }, icon('plus', 22)),
     h('div', { class: 'composer-box' },
       quoteBar,
       tray,
-      textarea,
-      h('div', { class: 'composer-tools' },
-        h('button', { type: 'button', class: 'icon-btn', title: '파일 첨부', onclick: () => fileInput.click() }, '📎'),
-        h('button', { type: 'button', class: 'icon-btn', title: '이모티콘', onclick: (event) => emojiPicker(event.currentTarget, (e) => {
-          const at = textarea.selectionStart ?? textarea.value.length;
-          textarea.value = textarea.value.slice(0, at) + e + textarea.value.slice(at);
-          textarea.focus();
-          textarea.setSelectionRange(at + e.length, at + e.length);
-          updateSend();
-        }) }, '☺'),
-        h('button', { type: 'button', class: 'icon-btn', title: '서식 도움말', onclick: (event) => popover(event.currentTarget, h('div', { class: 'format-help' },
-          h('strong', {}, '서식'), h('p', {}, '*굵게*  _기울임_  ~취소선~  `코드`'), h('p', {}, '```여러 줄 코드```'), h('p', {}, '@이름 으로 멘션, @all 로 모두에게'),
-          h('p', {}, 'Shift+Enter 줄바꿈 · ↑ 마지막 메시지 수정'))) }, 'Aa'),
-        fileInput,
-        h('span', { class: 'spacer' }),
-        sendBtn)),
+      h('div', { class: 'composer-row' },
+        textarea,
+        h('div', { class: 'composer-tools' },
+          h('button', { type: 'button', class: 'icon-btn', title: '서식 도움말', 'aria-label': '서식 도움말', onclick: (event) => popover(event.currentTarget, h('div', { class: 'format-help' },
+            h('strong', {}, '서식'), h('p', {}, '*굵게*  _기울임_  ~취소선~  `코드`'), h('p', {}, '```여러 줄 코드```'), h('p', {}, '@이름 으로 멘션, @all 로 모두에게'),
+            h('p', {}, 'Shift+Enter 줄바꿈 · ↑ 마지막 메시지 수정'))) }, icon('format')),
+          h('button', { type: 'button', class: 'icon-btn', title: '이모티콘', 'aria-label': '이모티콘', onclick: (event) => emojiPicker(event.currentTarget, (e) => {
+            const at = textarea.selectionStart ?? textarea.value.length;
+            textarea.value = textarea.value.slice(0, at) + e + textarea.value.slice(at);
+            textarea.focus();
+            textarea.setSelectionRange(at + e.length, at + e.length);
+            updateSend();
+          }) }, icon('smile')),
+          h('button', { type: 'button', class: 'icon-btn', title: '파일 올리기', 'aria-label': '파일 올리기', onclick: () => fileInput.click() }, icon('upload')),
+          fileInput))),
+    sendBtn,
   );
   // 파일을 끌어다 놓아도 올라간다.
   form.addEventListener('dragover', (event) => { event.preventDefault(); form.classList.add('drop'); });
