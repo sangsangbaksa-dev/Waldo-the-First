@@ -829,6 +829,17 @@ export class ChatService {
     return { id, filename, mime, size, url: `/files/${id}` };
   }
 
+  /** 아직 메시지에 붙지 않은 내 첨부 파일들의 Storage 경로. 보내기 전에 업로드가 끝났는지 확인할 때 쓴다. */
+  async pendingAttachmentPaths(userId, ids) {
+    const list = [...new Set(Array.isArray(ids) ? ids.filter((id) => typeof id === 'string') : [])];
+    if (!list.length) return [];
+    const rows = await this.db.all(
+      'SELECT path FROM chat_attachments WHERE id = ANY(?::text[]) AND user_id = ? AND message_id IS NULL',
+      [list, userId],
+    );
+    return rows.map((r) => r.path);
+  }
+
   /** 올린 사람이거나, 파일이 올라간 대화의 멤버여야 받을 수 있다. */
   async attachmentFor(userId, id) {
     const file = await this.db.one(

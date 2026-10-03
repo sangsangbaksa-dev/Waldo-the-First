@@ -1,32 +1,32 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { io as connect } from 'socket.io-client';
 import { RateLimiter } from '../src/auth.js';
-import { createChatServer } from '../src/server.js';
+import { createChatApp } from '../src/create-app.js';
 import { ChatService } from '../src/service.js';
-import { FakeSupabase, testDb } from './helpers.js';
+import { FakeRealtime, FakeSupabase, testDb } from './helpers.js';
 
 let server;
 let url;
 let supabase;
-const sockets = [];
+let realtime;
 
 before(async () => {
   supabase = new FakeSupabase();
-  server = createChatServer({
+  realtime = new FakeRealtime();
+  const app = createChatApp({
     service: new ChatService(await testDb()),
     supabase,
+    realtime,
     config: { secureCookies: false, allowedDomains: [] },
     signupLimiter: new RateLimiter({ max: 100, windowMs: 60_000 }),
   });
-  await new Promise((resolve) => server.httpServer.listen(0, resolve));
-  url = `http://localhost:${server.httpServer.address().port}`;
+  server = await new Promise((resolve) => {
+    const s = app.listen(0, () => resolve(s));
+  });
+  url = `http://localhost:${server.address().port}`;
 });
 
-after(() => {
-  for (const s of sockets) s.close();
-  server.io.close();
-});
+after(() => server.close());
 
 function client(cookie = '') {
   return async (method, path, body, headers = {}) => {
@@ -56,29 +56,9 @@ async function signup(email, name, password = 'password123') {
   return { user: res.body.user, cookie, call: client(cookie) };
 }
 
-function socketFor(cookie) {
-  const socket = connect(url, { transports: ['websocket'], forceNew: true, extraHeaders: { cookie } });
-  sockets.push(socket);
-  return new Promise((resolve, reject) => {
-    socket.on('connect', () => resolve(socket));
-    socket.on('connect_error', reject);
-  });
-}
-
-const next = (socket, event, match = () => true) =>
-  new Promise((resolve) => {
-    const handler = (data) => {
-      if (!match(data)) return;
-      socket.off(event, handler);
-      resolve(data);
-    };
-    socket.on(event, handler);
-  });
-
-test('로그인 없이는 API와 소켓을 쓸 수 없고, 직접 넣은 헤더 없는 요청은 막는다', async () => {
+test('로그인 없이는 API를 쓸 수 없고, 직접 넣은 헤더 없는 요청은 막는다', async () => {
   assert.equal((await fetch(`${url}/api/me`)).status, 401);
   assert.deepEqual(await (await fetch(`${url}/api/session`)).json(), { user: null });
-  await assert.rejects(socketFor(''), /unauthorized/);
   const res = await fetch(`${url}/auth/signup`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
@@ -89,7 +69,12 @@ test('로그인 없이는 API와 소켓을 쓸 수 없고, 직접 넣은 헤더 
 
 test('공개 설정에는 Supabase 공개 키만 있고 비밀 키는 없다', async () => {
   const config = await (await fetch(`${url}/api/config`)).json();
-  assert.deepEqual(config, { supabase: { url: 'https://test.supabase.co', anonKey: 'anon-key' }, passwordMin: 8 });
+  assert.deepEqual(config, {
+    supabase: { url: 'https://test.supabase.co', anonKey: 'anon-key' },
+    bucket: 'chat-attachments',
+    passwordMin: 8,
+    maxUpload: 25 * 1024 * 1024,
+  });
 });
 
 test('가입: 실명·이메일·비밀번호로 바로 가입되고 로그인된다', async () => {
@@ -140,93 +125,97 @@ test('비밀번호와 이름 바꾸기', async () => {
   assert.equal((await call('PATCH', '/api/me', { name: '새 이름' })).body.name, '새 이름');
 });
 
-test('대화, 실시간 메시지, 입력 중, 읽음, 반응이 오간다', async () => {
+test('대화, 실시간 메시지, 입력 중, 읽음, 반응이 각자의 채널로 간다', async () => {
   const a = await signup('alice@gmail.com', '앨리스');
   const b = await signup('bob@gmail.com', '밥');
-  const sa = await socketFor(a.cookie);
-  const sb = await socketFor(b.cookie);
+  const toA = (event, where) => realtime.next(`user:${a.user.id}`, event, where);
+  const toB = (event, where) => realtime.next(`user:${b.user.id}`, event, where);
 
-  const changed = next(sb, 'conversations:changed');
   const dm = (await a.call('POST', '/api/conversations/direct', { emails: ['bob@gmail.com'] })).body;
-  await changed;
+  await toB('conversations:changed');
   assert.equal(dm.name, '밥');
 
-  const typing = next(sb, 'typing');
-  sa.emit('typing', { conversationId: dm.id, typing: true });
-  assert.deepEqual(await typing, { conversationId: dm.id, threadId: null, userId: a.user.id, name: '앨리스', typing: true });
+  assert.equal((await a.call('POST', `/api/conversations/${dm.id}/typing`, { typing: true })).status, 204);
+  assert.deepEqual(await toB('typing'), { conversationId: dm.id, threadId: null, userId: a.user.id, name: '앨리스', typing: true });
+  assert.ok(!realtime.sent.some((m) => m.topic === `user:${a.user.id}` && m.event === 'typing'), '입력 중은 본인에게 안 보낸다');
 
-  const incoming = next(sb, 'message:new');
   const sent = await a.call('POST', `/api/conversations/${dm.id}/messages`, { body: `<@${b.user.id}> 안녕` });
   assert.equal(sent.status, 201);
-  const event = await incoming;
+  const event = await toB('message:new');
   assert.equal(event.message.body, `<@${b.user.id}> 안녕`);
   assert.deepEqual(event.mentioned, [b.user.id]);
+  await toA('message:new');
 
   const list = (await b.call('GET', '/api/conversations')).body;
   assert.equal(list.find((c) => c.id === dm.id).unread, 1);
 
-  const read = next(sa, 'read');
   await b.call('POST', `/api/conversations/${dm.id}/read`);
-  assert.equal((await read).userId, b.user.id);
+  assert.equal((await toA('read')).userId, b.user.id);
 
-  const updated = next(sa, 'message:update');
   await b.call('POST', `/api/messages/${sent.body.id}/reactions`, { emoji: '❤️' });
-  assert.deepEqual((await updated).message.reactions[0].userIds, [b.user.id]);
+  assert.deepEqual((await toA('message:update')).message.reactions[0].userIds, [b.user.id]);
 
-  const threadUpdate = next(sa, 'message:update', (e) => e.message.id === sent.body.id && e.message.replies.count === 1);
   await b.call('POST', `/api/conversations/${dm.id}/messages`, { body: '답장', threadId: sent.body.id });
-  await threadUpdate;
+  await toA('message:update', (p) => p.message.id === sent.body.id && p.message.replies.count === 1);
+
+  // 다른 사람 대화에는 입력 중을 보낼 수 없다.
+  const c = await signup('cathy@gmail.com', '캐시');
+  assert.equal((await c.call('POST', `/api/conversations/${dm.id}/typing`, { typing: true })).status, 404);
+
+  // 상태 변경은 모두의 채널로 간다.
+  await a.call('PATCH', '/api/me/status', { status: 'dnd' });
+  assert.deepEqual(await realtime.next('chat:everyone', 'status'), { userId: a.user.id, status: 'dnd', statusText: '' });
 });
 
-test('파일은 Supabase Storage에 올라가고, 대화 멤버만 서명 URL을 받는다', async () => {
+test('파일은 브라우저가 Storage에 직접 올리고, 대화 멤버만 받을 수 있다', async () => {
   const a = await signup('carol@gmail.com', '캐럴');
   await signup('dave@gmail.com', '데이브');
   const e = await signup('eve@gmail.com', '이브');
   const dm = (await a.call('POST', '/api/conversations/direct', { emails: ['dave@gmail.com'] })).body;
 
-  const upload = await a.call('POST', '/api/uploads', Buffer.from('hello'), {
-    'content-type': 'image/png',
-    'x-filename': encodeURIComponent('사진.png'),
-  });
-  assert.equal(upload.status, 201);
-  assert.equal(upload.body.filename, '사진.png');
-  const stored = [...supabase.files.entries()].find(([path]) => path.endsWith(upload.body.id));
-  assert.equal(stored[1].contentType, 'image/png');
-  const sent = await a.call('POST', `/api/conversations/${dm.id}/messages`, { attachmentIds: [upload.body.id] });
+  assert.equal((await a.call('POST', '/api/uploads', { filename: 'big.zip', mime: 'application/zip', size: 26 * 1024 * 1024 })).status, 413);
+  assert.equal((await a.call('POST', '/api/uploads', { filename: 'empty', size: 0 })).status, 400);
 
-  const own = await a.call('GET', upload.body.url);
-  assert.equal(own.status, 302);
-  assert.match(own.headers.get('location'), /^https:\/\/test\.supabase\.co\/storage\/v1\/object\/sign\//);
-  const saved = await a.call('GET', `${upload.body.url}?download`);
-  assert.equal(saved.status, 200);
-  assert.equal(saved.body, 'hello');
-  assert.equal(saved.headers.get('content-disposition'), `attachment; filename*=UTF-8''${encodeURIComponent('사진.png')}`);
-  assert.equal((await e.call('GET', upload.body.url)).status, 404);
+  const prepared = await a.call('POST', '/api/uploads', { filename: '사진.png', mime: 'image/png', size: 5 });
+  assert.equal(prepared.status, 201);
+  const { attachment, upload } = prepared.body;
+  assert.equal(attachment.filename, '사진.png');
+  assert.equal(upload.contentType, 'image/png');
+  assert.equal(upload.bucket, 'chat-attachments');
 
-  // HTML 같은 형식은 Storage에 바이너리로 두고, 받을 때는 내려받기로만 준다.
-  const html = await a.call('POST', '/api/uploads', Buffer.from('<script>alert(1)</script>'), {
-    'content-type': 'text/html',
-    'x-filename': 'x.html',
-  });
-  assert.equal([...supabase.files.values()].at(-1).contentType, 'application/octet-stream');
-  const served = await a.call('GET', html.body.url);
-  assert.equal(served.status, 200);
-  assert.equal(served.headers.get('content-type'), 'application/octet-stream');
-  assert.match(served.headers.get('content-disposition'), /^attachment; filename\*=UTF-8''x\.html$/);
+  // 아직 안 올렸으면 보낼 수 없다.
+  const early = await a.call('POST', `/api/conversations/${dm.id}/messages`, { attachmentIds: [attachment.id] });
+  assert.equal(early.status, 400);
+  assert.match(early.body.error, /아직 다 올라가지 않았어/);
+
+  supabase.browserUpload(upload.path, upload.token, Buffer.from('hello'), upload.contentType);
+  const sent = await a.call('POST', `/api/conversations/${dm.id}/messages`, { attachmentIds: [attachment.id] });
+  assert.equal(sent.status, 201);
+
+  const shown = await a.call('GET', attachment.url);
+  assert.equal(shown.status, 302);
+  assert.match(shown.headers.get('location'), /^https:\/\/test\.supabase\.co\/storage\/v1\/object\/sign\//);
+  const meta = await a.call('GET', `/api/files/${attachment.id}`);
+  assert.equal(meta.body.filename, '사진.png');
+  assert.match(meta.body.url, /\/object\/sign\//);
+  assert.equal((await e.call('GET', attachment.url)).status, 404);
+  assert.equal((await e.call('GET', `/api/files/${attachment.id}`)).status, 404);
+
+  // HTML 같은 형식은 Storage에 바이너리로 저장하게 한다.
+  const html = await a.call('POST', '/api/uploads', { filename: 'x.html', mime: 'text/html', size: 10 });
+  assert.equal(html.body.upload.contentType, 'application/octet-stream');
 
   // 메시지를 지우면 Storage에서도 지운다.
   await a.call('DELETE', `/api/messages/${sent.body.id}`);
   await new Promise((r) => setTimeout(r, 20));
-  assert.equal(stored[0] && supabase.files.has(stored[0]), false);
+  assert.equal(supabase.files.has(upload.path), false);
 });
 
 test('스페이스를 지우면 멤버들에게 알린다', async () => {
   const a = await signup('frank@gmail.com', '프랭크');
   const b = await signup('grace@gmail.com', '그레이스');
-  const sb = await socketFor(b.cookie);
   const space = (await a.call('POST', '/api/spaces', { name: '임시', memberEmails: ['grace@gmail.com'] })).body;
   assert.equal((await b.call('DELETE', `/api/conversations/${space.id}`)).status, 403);
-  const removed = next(sb, 'conversation:removed');
   assert.equal((await a.call('DELETE', `/api/conversations/${space.id}`)).status, 200);
-  assert.deepEqual(await removed, { id: space.id });
+  assert.deepEqual(await realtime.next(`user:${b.user.id}`, 'conversation:removed'), { id: space.id });
 });

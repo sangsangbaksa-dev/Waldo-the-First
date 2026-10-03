@@ -37,12 +37,18 @@ before(async () => {
     if (pathname.startsWith('/auth/v1/admin/users/')) return json(200, USER);
     if (pathname === '/storage/v1/bucket/chat-attachments') return json(404, { statusCode: '404', error: 'Bucket not found', message: 'Bucket not found' });
     if (pathname === '/storage/v1/bucket') return json(200, { name: 'chat-attachments' });
+    if (pathname.startsWith('/storage/v1/object/upload/sign/')) {
+      return json(200, { url: `${pathname.replace('/storage/v1', '')}?token=upload-token` });
+    }
+    if (req.method === 'HEAD' && pathname.startsWith('/storage/v1/object/info/') || req.method === 'HEAD') {
+      res.writeHead(pathname.endsWith('/missing') ? 404 : 200);
+      return res.end();
+    }
+    if (pathname.startsWith('/storage/v1/object/info/')) {
+      return pathname.endsWith('/missing') ? json(404, { statusCode: '404', error: 'not_found', message: 'Object not found' }) : json(200, { id: 'x', name: 'f1' });
+    }
     if (pathname.startsWith('/storage/v1/object/sign/')) {
       return json(200, { signedURL: `${pathname.replace('/storage/v1', '')}?token=signed` });
-    }
-    if (req.method === 'GET' && pathname.startsWith('/storage/v1/object/chat-attachments/')) {
-      res.writeHead(200, { 'content-type': 'application/octet-stream' });
-      return res.end('file-bytes');
     }
     if (pathname.startsWith('/storage/v1/object/')) return json(200, { Key: pathname, Id: 'x' });
     json(404, { error: 'not found' });
@@ -95,19 +101,39 @@ test('Storage: 비공개 버킷 만들기, 올리기, 서명 URL, 지우기', as
   const created = last((r) => r.url === '/storage/v1/bucket' && r.method === 'POST');
   assert.equal(JSON.parse(created.body).public, false);
 
-  await gateway.upload('u1/f1', Buffer.from('hi'), 'image/png');
-  const up = last((r) => r.url === '/storage/v1/object/chat-attachments/u1/f1');
-  assert.equal(up.method, 'POST');
-  assert.equal(up.body, 'hi');
-  assert.equal(up.headers['content-type'], 'image/png');
+  const ticket = await gateway.createUploadUrl('u1/f1');
+  assert.deepEqual(ticket, { path: 'u1/f1', token: 'upload-token' });
+  assert.ok(last((r) => r.method === 'POST' && r.url === '/storage/v1/object/upload/sign/chat-attachments/u1/f1'));
+  assert.equal(await gateway.exists('u1/f1'), true);
+  assert.equal(await gateway.exists('u1/missing'), false);
 
   const inline = await gateway.signedUrl('u1/f1');
   assert.match(inline, /\/storage\/v1\/object\/sign\/chat-attachments\/u1\/f1\?token=signed$/);
-  assert.equal((await gateway.download('u1/f1')).toString(), 'file-bytes');
-  assert.ok(last((r) => r.method === 'GET' && r.url === '/storage/v1/object/chat-attachments/u1/f1'));
 
   await gateway.remove(['u1/f1']);
   const del = last((r) => r.method === 'DELETE');
   assert.equal(del.url, '/storage/v1/object/chat-attachments');
   assert.deepEqual(JSON.parse(del.body), { prefixes: ['u1/f1'] });
+});
+
+test('Realtime: 서버는 service_role 키로 비공개 채널에 REST 방송을 한다', async () => {
+  const { RealtimeGateway } = await import('../src/realtime.js');
+  const calls = [];
+  const realtime = new RealtimeGateway({
+    url: 'https://x.supabase.co/',
+    serviceRoleKey: 'service-role-secret',
+    fetchImpl: async (endpoint, init) => {
+      calls.push({ endpoint, init });
+      return { ok: true, status: 202 };
+    },
+  });
+  await realtime.toUsers(['a', 'b', 'a'], 'message:new', { hi: 1 });
+  assert.equal(calls[0].endpoint, 'https://x.supabase.co/realtime/v1/api/broadcast');
+  assert.equal(calls[0].init.headers.Authorization, 'Bearer service-role-secret');
+  assert.deepEqual(JSON.parse(calls[0].init.body), {
+    messages: [
+      { topic: 'user:a', event: 'message:new', payload: { hi: 1 }, private: true },
+      { topic: 'user:b', event: 'message:new', payload: { hi: 1 }, private: true },
+    ],
+  });
 });

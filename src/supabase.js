@@ -7,7 +7,7 @@ const SERVER_AUTH = { persistSession: false, autoRefreshToken: false, detectSess
  * 서버가 Supabase에 하는 일을 모아 둔 곳.
  * - 계정 만들기: service_role 키로 관리자 API를 써서 이메일 인증 없이 바로 확정된 계정을 만든다.
  * - 로그인 확인: 브라우저가 Supabase에서 받은 access token이 진짜인지 확인한다.
- * - 파일: 비공개 Storage 버킷에 올리고, 받을 때는 잠깐만 유효한 서명 URL을 준다.
+ * - 파일: 브라우저가 1회용 토큰으로 비공개 Storage 버킷에 직접 올리고, 받을 때는 잠깐만 유효한 서명 URL을 쓴다.
  * service_role 키는 서버에만 있고 브라우저로는 절대 보내지 않는다.
  */
 export class SupabaseGateway {
@@ -71,26 +71,26 @@ export class SupabaseGateway {
     if (error && !/already exists/i.test(error.message)) throw new Error(`Storage 버킷을 만들지 못했어: ${error.message}`);
   }
 
-  async upload(path, buffer, contentType) {
-    const { error } = await this.admin.storage.from(this.bucket).upload(path, buffer, { contentType, upsert: false });
-    if (error) throw new ChatError(502, `파일을 올리지 못했어: ${error.message}`);
+  /**
+   * 브라우저가 Storage에 직접 올릴 수 있는 1회용 업로드 토큰.
+   * (Vercel 함수는 요청 크기가 4.5MB로 제한돼서, 파일을 서버를 거쳐 올릴 수 없다.)
+   */
+  async createUploadUrl(path) {
+    const { data, error } = await this.admin.storage.from(this.bucket).createSignedUploadUrl(path);
+    if (error) throw new ChatError(502, `업로드를 준비하지 못했어: ${error.message}`);
+    return { path: data.path, token: data.token };
   }
 
-  /** 브라우저 안에서 바로 여는 파일용 짧은 서명 URL. */
+  async exists(path) {
+    const { data, error } = await this.admin.storage.from(this.bucket).exists(path);
+    return !error && data === true;
+  }
+
+  /** 파일을 볼 때 쓰는 짧은 서명 URL. 내려받기 이름은 브라우저가 붙인다(Storage는 한글 이름을 두 번 인코딩한다). */
   async signedUrl(path, { expiresIn = 60 } = {}) {
     const { data, error } = await this.admin.storage.from(this.bucket).createSignedUrl(path, expiresIn);
     if (error) throw new ChatError(404, '파일을 찾을 수 없어.');
     return data.signedUrl;
-  }
-
-  /**
-   * 파일 내용을 받는다. 내려받기는 서버가 직접 보낸다:
-   * Storage의 download 옵션은 한글 파일 이름을 두 번 인코딩해서 이름이 깨진다.
-   */
-  async download(path) {
-    const { data, error } = await this.admin.storage.from(this.bucket).download(path);
-    if (error || !data) throw new ChatError(404, '파일을 찾을 수 없어.');
-    return Buffer.from(await data.arrayBuffer());
   }
 
   async remove(paths) {

@@ -1,4 +1,4 @@
-/* global io */
+/* global supabase */
 import { fromEditable, parseBody, renderBody, toEditable } from './format.js';
 
 // ───────────── 도우미 ─────────────
@@ -23,16 +23,14 @@ function h(tag, attrs = {}, ...children) {
   return el;
 }
 
-async function api(method, path, body, extraHeaders = {}) {
-  const isBinary = body instanceof Blob;
+async function api(method, path, body) {
   const res = await fetch(path, {
     method,
     headers: {
       'x-requested-with': 'chat',
-      ...(body !== undefined && !isBinary ? { 'content-type': 'application/json' } : {}),
-      ...extraHeaders,
+      ...(body !== undefined ? { 'content-type': 'application/json' } : {}),
     },
-    body: body === undefined ? undefined : isBinary ? body : JSON.stringify(body),
+    body: body === undefined ? undefined : JSON.stringify(body),
   });
   const data = res.headers.get('content-type')?.includes('json') ? await res.json() : null;
   if (res.status === 401 && path.startsWith('/api/') && path !== '/api/me/password') {
@@ -143,15 +141,28 @@ const state = {
   messages: new Map(), // conversationId → { list, hasMore, loading }
   thread: null, // { conversationId, rootId, list }
   typing: new Map(), // conversationId → Map(userId → { name, threadId, timer })
-  presence: {},
+  online: new Set(), // 지금 접속해 있는 사람 (Supabase Realtime presence)
+  statuses: new Map(), // userId → 'auto' | 'away' | 'dnd'
+  realtimeUp: false,
   collapsed: new Set(),
   notify: localStorage.getItem('chat:notify') !== 'off',
 };
 
 function presenceOf(userId) {
-  if (userId === state.me?.id) return state.me.presence;
-  return state.presence[userId] ?? 'offline';
+  const mine = userId === state.me?.id;
+  const status = mine ? state.me.status : (state.statuses.get(userId) ?? 'auto');
+  const online = mine ? state.realtimeUp : state.online.has(userId);
+  if (status === 'dnd') return 'dnd';
+  if (!online) return 'offline';
+  return status === 'away' ? 'away' : 'online';
 }
+
+function rememberStatuses(users) {
+  for (const user of users) if (user?.id && user.status) state.statuses.set(user.id, user.status);
+}
+
+// 브라우저용 Supabase: 로그인 세션을 들고 있고, 실시간 채널을 구독한다.
+let sb;
 
 const activeConversation = () =>
   state.view.type === 'conversation' ? state.conversations.get(state.view.id) : null;
@@ -160,8 +171,18 @@ const activeConversation = () =>
 
 async function boot() {
   state.config = await api('GET', '/api/config');
+  sb = supabase.createClient(state.config.supabase.url, state.config.supabase.anonKey, {
+    auth: { storageKey: 'waldo-chat-auth', persistSession: true, autoRefreshToken: true, detectSessionInUrl: false },
+  });
   const { user: me } = await api('GET', '/api/session');
   if (!me) return showLogin();
+
+  // 실시간 채널은 Supabase 로그인 세션으로 연다. 세션이 없거나 다른 계정이면 다시 로그인한다.
+  const { data } = await sb.auth.getSession();
+  if (!data.session || data.session.user.email?.toLowerCase() !== me.email) {
+    await api('POST', '/auth/logout').catch(() => {});
+    return showLogin('실시간 연결을 위해 한 번만 다시 로그인해 줘.');
+  }
 
   state.me = me;
   $('#app').hidden = false;
@@ -172,15 +193,16 @@ async function boot() {
   }
   renderTopbar();
   await refreshConversations();
-  connectSocket();
+  connectRealtime();
   bindShell();
   route();
   window.addEventListener('hashchange', route);
 }
 
-function showLogin() {
+function showLogin(message = '') {
   $('#login').hidden = false;
   const error = $('#login-error');
+  error.textContent = message;
   const tabs = document.querySelectorAll('.login-tabs [data-tab]');
   const show = (tab) => {
     for (const t of tabs) t.classList.toggle('on', t.dataset.tab === tab);
@@ -195,26 +217,25 @@ function showLogin() {
     form.querySelector('[type=submit]').disabled = on;
   };
 
-  // 로그인: Supabase에 직접 이메일·비밀번호를 보내 토큰을 받고, 그 토큰으로 이 사이트의 세션을 연다.
+  // 로그인: 브라우저가 Supabase에 직접 로그인하고(세션은 실시간 연결에도 쓴다),
+  // 받은 토큰으로 이 사이트의 세션 쿠키를 연다.
+  const signIn = async (email, password) => {
+    const { data, error: failure } = await sb.auth.signInWithPassword({ email: String(email).trim(), password });
+    if (failure) {
+      if (failure.status === 429) throw new Error('로그인 시도가 너무 많아. 잠시 뒤에 다시 해 줘.');
+      if (failure.code === 'invalid_credentials' || failure.status === 400) throw new Error('이메일 또는 비밀번호가 맞지 않아.');
+      throw new Error('로그인 서버에 연결하지 못했어.');
+    }
+    await api('POST', '/auth/session', { accessToken: data.session.access_token });
+  };
+
   $('#signin-form').addEventListener('submit', async (event) => {
     event.preventDefault();
     const form = new FormData(event.target);
     error.textContent = '';
     busy(event.target, true);
     try {
-      const { url, anonKey } = state.config.supabase;
-      const res = await fetch(`${url}/auth/v1/token?grant_type=password`, {
-        method: 'POST',
-        headers: { apikey: anonKey, 'content-type': 'application/json' },
-        body: JSON.stringify({ email: String(form.get('email')).trim(), password: form.get('password') }),
-      });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) {
-        if (res.status === 429) throw new Error('로그인 시도가 너무 많아. 잠시 뒤에 다시 해 줘.');
-        if (data.error_code === 'invalid_credentials' || res.status === 400) throw new Error('이메일 또는 비밀번호가 맞지 않아.');
-        throw new Error('로그인 서버에 연결하지 못했어.');
-      }
-      await api('POST', '/auth/session', { accessToken: data.access_token });
+      await signIn(form.get('email'), form.get('password'));
       location.reload();
     } catch (err) {
       error.textContent = err.message === 'Failed to fetch' ? '로그인 서버에 연결하지 못했어.' : err.message;
@@ -233,6 +254,7 @@ function showLogin() {
     busy(event.target, true);
     try {
       await api('POST', '/auth/signup', { name: form.get('name'), email: form.get('email'), password: form.get('password') });
+      await signIn(form.get('email'), form.get('password'));
       location.reload();
     } catch (err) {
       error.textContent = err.message;
@@ -278,7 +300,8 @@ const go = (hash) => {
 function renderTopbar() {
   const me = state.me;
   const status = $('#status-btn');
-  status.replaceChildren(h('span', { class: `presence-dot ${me.presence}` }), STATUS_LABEL[me.presence] ?? '활동 중');
+  const presence = presenceOf(me.id);
+  status.replaceChildren(h('span', { class: `presence-dot ${presence}` }), STATUS_LABEL[presence] ?? '활동 중');
   $('#avatar-btn').replaceChildren(avatar(me, 32, { presence: false }));
 }
 
@@ -382,6 +405,7 @@ function openAccountMenu(anchor) {
     menuItem('🔑 비밀번호 바꾸기', () => { closePopover(); openPassword(); }),
     menuItem('↪ 로그아웃', run(async () => {
       await api('POST', '/auth/logout');
+      await sb.auth.signOut().catch(() => {});
       location.href = '/';
     })),
   ], { align: 'right' });
@@ -647,6 +671,7 @@ function openBrowseSpaces() {
 async function refreshConversations() {
   const list = await api('GET', '/api/conversations');
   state.conversations = new Map(list.map((c) => [c.id, c]));
+  for (const c of list) rememberStatuses(c.members);
   renderNav();
   updateTitle();
   if (state.view.type === 'conversation') {
@@ -1069,7 +1094,7 @@ function messageItem(message, { compact = false, inThread = false } = {}) {
   const attachments = message.attachments.length
     ? h('div', { class: 'attachments' }, message.attachments.map((a) => (a.mime.startsWith('image/') && a.mime !== 'image/svg+xml'
       ? h('a', { href: a.url, target: '_blank', rel: 'noopener', class: 'att-image' }, h('img', { src: a.url, alt: a.filename, loading: 'lazy' }))
-      : h('a', { href: `${a.url}?download`, class: 'att-file', download: a.filename },
+      : h('a', { href: a.url, class: 'att-file', onclick: (event) => { event.preventDefault(); downloadFile(a); } },
         h('span', { class: 'att-icon' }, '📄'), h('span', { class: 'who' }, h('strong', {}, a.filename), h('span', { class: 'muted' }, fileSize(a.size)))))))
     : null;
 
@@ -1261,11 +1286,17 @@ function composer({ conversationId, threadId }) {
       pending.push(entry);
       renderTray();
       try {
-        const result = await api('POST', '/api/uploads', file, {
-          'content-type': file.type || 'application/octet-stream',
-          'x-filename': encodeURIComponent(file.name),
+        // 1) 서버에 자리를 만들고 1회용 토큰을 받아서 2) 브라우저가 Storage에 직접 올린다.
+        const { attachment, upload: target } = await api('POST', '/api/uploads', {
+          filename: file.name,
+          mime: file.type || 'application/octet-stream',
+          size: file.size,
         });
-        entry.id = result.id;
+        const { error } = await sb.storage
+          .from(target.bucket)
+          .uploadToSignedUrl(target.path, target.token, file, { contentType: target.contentType });
+        if (error) throw new Error(`올리지 못했어 (${error.message})`);
+        entry.id = attachment.id;
       } catch (error) {
         pending.splice(pending.indexOf(entry), 1);
         toast(`${file.name}: ${error.message}`, { error: true });
@@ -1322,7 +1353,7 @@ function composer({ conversationId, threadId }) {
   let typingSent = false;
   const stopTyping = () => {
     clearTimeout(typingTimer);
-    if (typingSent) socket.emit('typing', { conversationId, threadId, typing: false });
+    if (typingSent) sendTyping(conversationId, threadId, false);
     typingSent = false;
   };
 
@@ -1353,7 +1384,7 @@ function composer({ conversationId, threadId }) {
     updateSuggest();
     if (!textarea.value) return stopTyping();
     if (!typingSent) {
-      socket.emit('typing', { conversationId, threadId, typing: true });
+      sendTyping(conversationId, threadId, true);
       typingSent = true;
     }
     clearTimeout(typingTimer);
@@ -1532,7 +1563,22 @@ function clearTyping(conversationId, userId) {
 
 // ───────────── 실시간 연결 ─────────────
 
-let socket;
+function sendTyping(conversationId, threadId, typing) {
+  api('POST', `/api/conversations/${conversationId}/typing`, { threadId, typing }).catch(() => {});
+}
+
+/** 파일을 원래 이름 그대로 저장한다. */
+const downloadFile = run(async (attachment) => {
+  const { url, filename } = await api('GET', `/api/files/${attachment.id}`);
+  const res = await fetch(url);
+  if (!res.ok) throw new Error('파일을 받지 못했어.');
+  const href = URL.createObjectURL(await res.blob());
+  const link = h('a', { href, download: filename });
+  document.body.append(link);
+  link.click();
+  link.remove();
+  setTimeout(() => URL.revokeObjectURL(href), 10_000);
+});
 
 function updatePresenceDots(userId) {
   const presence = presenceOf(userId);
@@ -1544,74 +1590,100 @@ function updatePresenceDots(userId) {
   }
 }
 
-function connectSocket() {
-  socket = io({ transports: ['websocket', 'polling'] });
+/** 끊긴 사이에 온 메시지를 놓치지 않게 다시 받아 온다. */
+const resync = run(async () => {
+  state.messages.clear();
+  await refreshConversations();
+  if (state.view.type === 'conversation') {
+    const scroller = $('#scroller');
+    const keep = scroller ? scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 120 : true;
+    const page = await api('GET', `/api/conversations/${state.view.id}/messages`);
+    state.messages.set(state.view.id, { list: page.messages, hasMore: page.hasMore, loading: false });
+    renderMessages(state.view.id);
+    if (keep && scroller) scroller.scrollTop = scroller.scrollHeight;
+  }
+});
 
-  socket.on('connect', run(async () => {
-    state.presence = await api('GET', '/api/presence');
-    for (const id of Object.keys(state.presence)) updatePresenceDots(id);
-    // 끊긴 사이에 온 메시지를 놓치지 않게 다시 받아 온다.
-    state.messages.clear();
-    await refreshConversations();
-    if (state.view.type === 'conversation') {
-      const scroller = $('#scroller');
-      const keep = scroller ? scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 120 : true;
-      const page = await api('GET', `/api/conversations/${state.view.id}/messages`);
-      state.messages.set(state.view.id, { list: page.messages, hasMore: page.hasMore, loading: false });
-      renderMessages(state.view.id);
-      if (keep && scroller) scroller.scrollTop = scroller.scrollHeight;
-    }
-  }));
+/**
+ * Supabase Realtime 구독.
+ * - user:<내 ID> 비공개 채널: 서버가 보내는 새 메시지·수정·읽음·입력 중 등 (나만 받을 수 있음)
+ * - chat:everyone 채널: 누가 접속해 있는지(presence)와 상태 변경
+ */
+function connectRealtime() {
+  const handlers = {
+    'message:new': ({ message, mentioned }) => receiveMessage(message, { mentioned }),
+    'message:update': ({ message }) => {
+      applyMessageUpdate({ ...message, starred: undefined });
+      refreshSoon();
+    },
+    'conversations:changed': refreshSoon,
+    'conversation:removed': ({ id }) => {
+      state.messages.delete(id);
+      if (state.view.type === 'conversation' && state.view.id === id) {
+        toast('이 대화에 더 이상 접근할 수 없어.');
+        go('#/home');
+      }
+      refreshSoon();
+    },
+    typing: ({ conversationId, threadId, userId, name, typing }) => {
+      const map = state.typing.get(conversationId) ?? new Map();
+      state.typing.set(conversationId, map);
+      clearTimeout(map.get(userId)?.timer);
+      if (typing) map.set(userId, { name, threadId, timer: setTimeout(() => clearTyping(conversationId, userId), 6000) });
+      else map.delete(userId);
+      renderTyping(conversationId);
+    },
+    read: ({ conversationId, userId, at }) => {
+      const conversation = state.conversations.get(conversationId);
+      const member = conversation?.members.find((m) => m.id === userId);
+      if (!member) return;
+      member.lastReadAt = at;
+      if (state.view.type === 'conversation' && state.view.id === conversationId) renderMessages(conversationId);
+    },
+  };
 
-  socket.on('connect_error', (error) => {
-    if (error.message === 'unauthorized') location.reload();
-  });
-
-  socket.on('message:new', ({ message, mentioned }) => receiveMessage(message, { mentioned }));
-  socket.on('message:update', ({ message }) => {
-    applyMessageUpdate({ ...message, starred: undefined });
-    refreshSoon();
-  });
-  socket.on('conversations:changed', refreshSoon);
-  socket.on('conversation:removed', ({ id }) => {
-    state.messages.delete(id);
-    if (state.view.type === 'conversation' && state.view.id === id) {
-      toast('이 대화에 더 이상 접근할 수 없어.');
-      go('#/home');
-    }
-    refreshSoon();
-  });
-
-  socket.on('typing', ({ conversationId, threadId, userId, name, typing }) => {
-    const map = state.typing.get(conversationId) ?? new Map();
-    state.typing.set(conversationId, map);
-    clearTimeout(map.get(userId)?.timer);
-    if (typing) map.set(userId, { name, threadId, timer: setTimeout(() => clearTyping(conversationId, userId), 6000) });
-    else map.delete(userId);
-    renderTyping(conversationId);
-  });
-
-  socket.on('read', ({ conversationId, userId, at }) => {
-    const conversation = state.conversations.get(conversationId);
-    const member = conversation?.members.find((m) => m.id === userId);
-    if (!member) return;
-    member.lastReadAt = at;
-    if (state.view.type === 'conversation' && state.view.id === conversationId) renderMessages(conversationId);
-  });
-
-  socket.on('presence', ({ userId, presence, statusText }) => {
-    state.presence[userId] = presence;
-    if (userId === state.me.id) {
-      state.me.presence = presence;
-      state.me.statusText = statusText;
+  const mine = sb.channel(`user:${state.me.id}`, { config: { private: true } });
+  for (const [event, handle] of Object.entries(handlers)) {
+    mine.on('broadcast', { event }, ({ payload }) => handle(payload ?? {}));
+  }
+  let everConnected = false;
+  mine.subscribe((status) => {
+    const up = status === 'SUBSCRIBED';
+    if (up && everConnected && !state.realtimeUp) resync();
+    if (up) everConnected = true;
+    if (state.realtimeUp !== up && status !== 'CLOSED') {
+      state.realtimeUp = up;
       renderTopbar();
+      updatePresenceDots(state.me.id);
+      if (!up && everConnected) toast('실시간 연결이 끊겼어. 다시 연결하는 중…');
     }
-    for (const conversation of state.conversations.values()) {
-      const member = conversation.members.find((m) => m.id === userId);
-      if (member) member.statusText = statusText;
-    }
-    updatePresenceDots(userId);
   });
+
+  const everyone = sb.channel('chat:everyone', { config: { private: true, presence: { key: state.me.id } } });
+  everyone
+    .on('presence', { event: 'sync' }, () => {
+      const before = state.online;
+      state.online = new Set(Object.keys(everyone.presenceState()));
+      for (const id of new Set([...before, ...state.online])) updatePresenceDots(id);
+    })
+    .on('broadcast', { event: 'status' }, ({ payload }) => {
+      const { userId, status, statusText } = payload ?? {};
+      if (!userId) return;
+      state.statuses.set(userId, status);
+      if (userId === state.me.id) {
+        state.me.status = status;
+        state.me.statusText = statusText;
+        renderTopbar();
+      }
+      for (const conversation of state.conversations.values()) {
+        const member = conversation.members.find((m) => m.id === userId);
+        if (member) member.statusText = statusText;
+      }
+      updatePresenceDots(userId);
+    })
+    .subscribe(async (status) => {
+      if (status === 'SUBSCRIBED') await everyone.track({ at: Date.now() });
+    });
 }
 
 boot();

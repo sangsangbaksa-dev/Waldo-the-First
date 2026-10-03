@@ -4,10 +4,10 @@
   "private": true,
   "description": "Supabase로 계정과 데이터를 관리하는 팀 채팅 웹사이트",
   "type": "module",
-  "main": "src/index.js",
+  "main": "src/app.js",
   "scripts": {
-    "start": "node src/index.js",
-    "dev": "node --watch src/index.js",
+    "start": "node src/local.js",
+    "dev": "node --watch src/local.js",
     "test": "node --test test/*.test.js"
   },
   "engines": {
@@ -17,11 +17,9 @@
     "@supabase/supabase-js": "^2.117.2",
     "express": "^5.2.1",
     "pg": "^8.23.1",
-    "pg-connection-string": "^2.14.1",
-    "socket.io": "^4.8.4"
+    "pg-connection-string": "^2.14.1"
   },
   "devDependencies": {
-    "@electric-sql/pglite": "^0.5.8",
-    "socket.io-client": "^4.8.4"
+    "@electric-sql/pglite": "^0.5.8"
   }
 }

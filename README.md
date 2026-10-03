@@ -8,8 +8,10 @@
 |---|---|
 | 계정(이메일·비밀번호) | Supabase **Auth** |
 | 프로필, 대화, 메시지, 반응, 멘션, 세션 | Supabase **Postgres** (`chat_`로 시작하는 테이블) |
-| 첨부 파일 | Supabase **Storage** 비공개 버킷 `chat-attachments` |
-| 실시간 전달(새 메시지, 입력 중, 접속 상태) | 이 Node 서버의 Socket.IO |
+| 첨부 파일 | Supabase **Storage** 비공개 버킷 `chat-attachments` (브라우저가 1회용 토큰으로 직접 올림) |
+| 실시간 전달(새 메시지, 입력 중, 접속 상태) | Supabase **Realtime** 비공개 채널 |
+
+서버는 상태를 들고 있지 않아서 **Vercel** 같은 서버리스에서 그대로 돌아.
 
 ## 기능
 
@@ -40,7 +42,8 @@
 1. [supabase.com](https://supabase.com)에서 새 프로젝트를 만들어. 지역은 가까운 곳(예: Seoul)으로. **DB 비밀번호**를 꼭 적어 둬.
 2. 다른 설정은 바꿀 필요 없어.
    - 이 사이트는 서버가 관리자 키로 계정을 만들기 때문에 **"Confirm email"을 꺼 둘 필요가 없어.** 인증 메일은 안 가.
-   - 테이블은 서버가 처음 켜질 때 자동으로 만들어. 직접 만들고 싶으면 `supabase/schema.sql`을 SQL Editor에 붙여 넣고 실행해도 돼.
+   - 테이블은 `npm start`로 처음 켤 때 자동으로 만들어져. 직접 만들려면 `supabase/schema.sql`을 SQL Editor에서 실행해.
+   - **실시간 채널 권한은 한 번만 직접 실행해야 해:** `supabase/realtime.sql`을 SQL Editor에 붙여 넣고 실행.
    - Storage 버킷도 서버가 비공개로 자동으로 만들어.
 
 ### 2. `.env` 채우기
@@ -65,16 +68,20 @@ Node.js 22.9 이상이 필요해.
 ```bash
 npm install
 npm start        # http://localhost:3000
-npm test         # 테스트 31개 (Supabase 없이 돌아가)
+npm test         # 테스트 32개 (Supabase 없이 돌아가)
 ```
 처음 켜면 테이블과 버킷이 만들어지고 `채팅 서버: http://localhost:3000`이 나와. 설정이 틀리면 무엇을 고치면 되는지 한국어로 알려 줘.
 
 Windows PowerShell에서 `npm.ps1 파일을 로드할 수 없습니다`가 나오면 `npm` 대신 `npm.cmd`(`npm.cmd install`, `npm.cmd start`)를 쓰면 돼. 브라우저에서 **계정 만들기**로 가입하면 바로 시작이야.
 
-### 4. 인터넷에 올리기 (예: Render, Railway, Fly.io)
-- 위 환경 변수들을 그 서비스 설정에 넣고, `BASE_URL`을 `https://내주소`로 바꿔.
-- 프록시 뒤에서 돌면 `TRUST_PROXY=1`을 넣어 줘.
-- 웹소켓을 쓰니까 웹소켓을 지원하는 곳이어야 하고, **서버는 한 대**로 돌려야 해(접속 상태를 서버 메모리에 들고 있어서).
+### 4. Vercel에 올리기
+`vercel.json`에 설정이 들어 있어(함수 지역은 Supabase와 가까운 싱가포르 `sin1`).
+
+1. Vercel에서 이 깃허브 저장소로 프로젝트를 만들어(Framework: Express). 진입 파일은 `src/app.js`야.
+2. 프로젝트 **Settings → Environment Variables**에 `.env`와 같은 값을 넣어. 단, DB는 서버리스에 맞는 **Transaction pooler**를 써:
+   - `DATABASE_PORT=6543` (Connect → Transaction pooler와 같은 host/user)
+   - `BASE_URL`은 넣지 않아도 돼. Vercel에서는 로그인 쿠키에 자동으로 Secure가 붙어.
+3. 배포하기 전에 테이블과 실시간 권한(`supabase/schema.sql`, `supabase/realtime.sql`)이 만들어져 있어야 해.
 
 ## 로그인은 이렇게 동작해
 
@@ -87,22 +94,28 @@ Windows PowerShell에서 `npm.ps1 파일을 로드할 수 없습니다`가 나�
 
 ```
 src/
-  index.js     환경 변수 읽기, DB 연결, 테이블·버킷 준비, 서버 시작
-  server.js    API, 파일 업로드/다운로드(Storage 서명 URL), Socket.IO
+  app.js       Vercel 진입 파일 (export default app)
+  local.js     내 컴퓨터에서 실행: 테이블·버킷 준비 후 http://localhost:3000
+  runtime.js   환경 변수 읽기, DB 연결, Supabase 연결 만들기
+  create-app.js  API, 파일 올리기 토큰·서명 URL
+  realtime.js  Supabase Realtime으로 이벤트 보내기
+  database-config.js  DB 접속 정보 확인과 에러 설명
   auth.js      가입, 로그인 세션, 로그아웃, 가입 시도 제한
   supabase.js  Supabase Auth 관리자 API와 Storage를 쓰는 곳
   service.js   대화·메시지·멤버·권한 규칙
   db.js        Postgres 연결(실서버는 pg, 테스트는 PGlite)
 supabase/
   schema.sql   테이블 정의 (RLS 켬)
-public/        화면 (index.html, app.js, format.js, style.css)
+  realtime.sql 실시간 채널 권한 (한 번만 실행)
+public/        화면 (index.html, app.js, format.js, style.css, vendor/supabase.js)
 test/          테스트: 규칙, API·소켓, Supabase 요청 모양, 서식
 ```
 
 ## 보안 메모
 
 - `chat_` 테이블에는 모두 **RLS를 켜고 정책을 하나도 안 만들었어.** 그래서 공개 `anon` 키로 Supabase REST API를 써도 테이블을 읽거나 쓸 수 없고, DB에 직접 연결한 우리 서버만 접근해. 모든 권한 검사는 서버(`service.js`)에서 해.
-- Storage 버킷은 비공개야. 파일을 볼 때마다 서버가 그 대화의 멤버인지 확인하고, 1분 동안만 쓸 수 있는 서명 URL을 줘. HTML 같은 위험한 형식은 내려받기로만 줘.
+- Storage 버킷은 비공개야. 올릴 때는 서버가 크기(25MB)를 확인하고 1회용 토큰을 주고, 볼 때마다 그 대화의 멤버인지 확인한 뒤 1분짜리 서명 URL을 줘. HTML 같은 위험한 형식은 바이너리로 저장해.
+- 실시간 채널은 비공개야. `supabase/realtime.sql` 규칙 때문에 각자 자기 채널(`user:<내 ID>`)만 받을 수 있고, 서버만 보낼 수 있어.
 - 바꾸는 요청에는 `X-Requested-With: chat` 헤더가 꼭 있어야 해서 다른 사이트가 몰래 요청을 보낼 수 없어.
 - 메시지는 항상 글자로만 그려서 스크립트가 끼어들 수 없어.
 - 가입은 같은 IP에서 10분에 10번까지만 돼.
@@ -110,4 +123,4 @@ test/          테스트: 규칙, API·소켓, Supabase 요청 모양, 서식
 
 ## 아직 없는 것
 
-비밀번호 재설정 메일, 프로필 사진 올리기, 영상 통화, 봇/앱, 메시지 전달, 예약 전송, 휴대폰 앱 푸시 알림. 실시간 기능은 Node 서버 한 대 기준이라 여러 대로 늘리려면 추가 작업(Supabase Realtime 또는 Redis)이 필요해.
+비밀번호 재설정 메일, 프로필 사진 올리기, 영상 통화, 봇/앱, 메시지 전달, 예약 전송, 휴대폰 앱 푸시 알림.
