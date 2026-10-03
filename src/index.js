@@ -1,5 +1,6 @@
 import { readFileSync } from 'node:fs';
 import pg from 'pg';
+import { databaseOptions, explainDbError } from './database-config.js';
 import { createDb, pgAdapter } from './db.js';
 import { createChatServer, MAX_UPLOAD } from './server.js';
 import { ChatService } from './service.js';
@@ -35,7 +36,12 @@ if (process.env.DATABASE_SSL === 'disable') ssl = false;
 else if (process.env.DATABASE_CA_CERT) ssl = { ca: readFileSync(process.env.DATABASE_CA_CERT, 'utf8'), rejectUnauthorized: true };
 else ssl = { rejectUnauthorized: false };
 
-const pool = new pg.Pool({ connectionString: required('DATABASE_URL'), ssl, max: Number(process.env.DATABASE_POOL_SIZE) || 10 });
+const database = databaseOptions(process.env);
+if (database.error) {
+  console.error(`DB 설정 문제: ${database.error}`);
+  process.exit(1);
+}
+const pool = new pg.Pool({ ...database.options, ssl, max: Number(process.env.DATABASE_POOL_SIZE) || 10 });
 pool.on('error', (error) => console.error('DB 연결 오류:', error.message));
 
 const db = createDb(pgAdapter(pool));
@@ -46,8 +52,21 @@ const supabase = new SupabaseGateway({
   bucket: process.env.SUPABASE_BUCKET || 'chat-attachments',
 });
 
-await db.migrate();
-await supabase.ensureBucket(MAX_UPLOAD);
+try {
+  await db.migrate();
+} catch (error) {
+  const hint = explainDbError(error);
+  console.error(hint ? `DB에 연결하지 못했어: ${hint}` : error);
+  if (hint) console.error(`  (원래 메시지: ${error.message})`);
+  process.exit(1);
+}
+try {
+  await supabase.ensureBucket(MAX_UPLOAD);
+} catch (error) {
+  console.error(`Supabase에 연결하지 못했어: ${error.message}`);
+  console.error('  SUPABASE_URL과 SUPABASE_SERVICE_ROLE_KEY가 맞는지 확인해 (service_role 키 자리에 anon 키를 넣지 않았는지도).');
+  process.exit(1);
+}
 
 const service = new ChatService(db);
 const { httpServer } = createChatServer({ service, supabase, config });

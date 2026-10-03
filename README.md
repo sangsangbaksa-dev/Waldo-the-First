@@ -52,7 +52,11 @@ cp .env.example .env
 | `SUPABASE_URL` | Project Settings → API → Project URL |
 | `SUPABASE_ANON_KEY` | Project Settings → API → `anon` `public` 키 |
 | `SUPABASE_SERVICE_ROLE_KEY` | Project Settings → API → `service_role` 키 (**비밀**) |
-| `DATABASE_URL` | 위쪽 **Connect** 버튼 → Session pooler 연결 문자열, `[YOUR-PASSWORD]`를 DB 비밀번호로 |
+| `DATABASE_HOST` | 위쪽 **Connect** 버튼 → Connection String → Session pooler의 host (예: `aws-1-ap-southeast-1.pooler.supabase.com`) |
+| `DATABASE_USER` | 같은 곳의 user (`postgres.프로젝트ID` 모양) |
+| `DATABASE_PASSWORD` | DB 비밀번호를 **그대로** (`@` 같은 기호도 바꾸지 않고, 따옴표 없이) |
+
+> 주소 한 줄(`DATABASE_URL`)로 적어도 되지만, 비밀번호에 `@ # / ?` 같은 기호가 있으면 바꿔 적어야 해서 헷갈려. 위처럼 나눠 적는 걸 권해.
 
 > ⚠️ `service_role` 키는 모든 권한을 가진 열쇠야. 서버의 `.env`에만 두고, 브라우저 코드·깃허브·채팅에 절대 올리지 마. 서버는 이 키를 브라우저로 보내지 않아.
 
@@ -61,9 +65,11 @@ Node.js 22.9 이상이 필요해.
 ```bash
 npm install
 npm start        # http://localhost:3000
-npm test         # 테스트 27개 (Supabase 없이 돌아가)
+npm test         # 테스트 31개 (Supabase 없이 돌아가)
 ```
-처음 켜면 테이블과 버킷이 만들어지고 `채팅 서버: http://localhost:3000`이 나와. 브라우저에서 **계정 만들기**로 가입하면 바로 시작이야.
+처음 켜면 테이블과 버킷이 만들어지고 `채팅 서버: http://localhost:3000`이 나와. 설정이 틀리면 무엇을 고치면 되는지 한국어로 알려 줘.
+
+Windows PowerShell에서 `npm.ps1 파일을 로드할 수 없습니다`가 나오면 `npm` 대신 `npm.cmd`(`npm.cmd install`, `npm.cmd start`)를 쓰면 돼. 브라우저에서 **계정 만들기**로 가입하면 바로 시작이야.
 
 ### 4. 인터넷에 올리기 (예: Render, Railway, Fly.io)
 - 위 환경 변수들을 그 서비스 설정에 넣고, `BASE_URL`을 `https://내주소`로 바꿔.
