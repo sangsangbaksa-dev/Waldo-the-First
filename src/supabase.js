@@ -32,10 +32,10 @@ export class SupabaseGateway {
     });
     if (error) {
       if (error.code === 'email_exists' || (error.status === 422 && /already/i.test(error.message))) {
-        throw new ChatError(409, '이미 가입된 이메일이야. 로그인해 줘.');
+        throw new ChatError(409, '이미 가입된 이메일이에요. 로그인해 주세요.');
       }
-      if (error.code === 'weak_password') throw new ChatError(400, '비밀번호가 너무 약해. 더 길게 만들어 줘.');
-      throw new ChatError(502, `계정을 만들지 못했어: ${error.message}`);
+      if (error.code === 'weak_password') throw new ChatError(400, '비밀번호가 너무 약해요. 더 길게 만들어 주세요.');
+      throw new ChatError(502, `계정을 만들지 못했어요: ${error.message}`);
     }
     return { id: data.user.id, email: data.user.email };
   }
@@ -58,8 +58,8 @@ export class SupabaseGateway {
   async updatePassword(authId, password) {
     const { error } = await this.admin.auth.admin.updateUserById(authId, { password });
     if (error) {
-      if (error.code === 'weak_password') throw new ChatError(400, '비밀번호가 너무 약해. 더 길게 만들어 줘.');
-      throw new ChatError(502, `비밀번호를 바꾸지 못했어: ${error.message}`);
+      if (error.code === 'weak_password') throw new ChatError(400, '비밀번호가 너무 약해요. 더 길게 만들어 주세요.');
+      throw new ChatError(502, `비밀번호를 바꾸지 못했어요: ${error.message}`);
     }
   }
 
@@ -68,7 +68,7 @@ export class SupabaseGateway {
     const { data } = await this.admin.storage.getBucket(this.bucket);
     if (data) return;
     const { error } = await this.admin.storage.createBucket(this.bucket, { public: false, fileSizeLimit });
-    if (error && !/already exists/i.test(error.message)) throw new Error(`Storage 버킷을 만들지 못했어: ${error.message}`);
+    if (error && !/already exists/i.test(error.message)) throw new Error(`Storage 버킷을 만들지 못했어요: ${error.message}`);
   }
 
   /**
@@ -77,8 +77,14 @@ export class SupabaseGateway {
    */
   async createUploadUrl(path) {
     const { data, error } = await this.admin.storage.from(this.bucket).createSignedUploadUrl(path);
-    if (error) throw new ChatError(502, `업로드를 준비하지 못했어: ${error.message}`);
+    if (error) throw new ChatError(502, `업로드를 준비하지 못했어요: ${error.message}`);
     return { path: data.path, token: data.token };
+  }
+
+  /** 전달할 때 첨부 파일을 새 경로로 복사한다. */
+  async copy(from, to) {
+    const { error } = await this.admin.storage.from(this.bucket).copy(from, to);
+    if (error) throw new ChatError(502, `파일을 복사하지 못했어요: ${error.message}`);
   }
 
   async exists(path) {
@@ -89,7 +95,7 @@ export class SupabaseGateway {
   /** 파일을 볼 때 쓰는 짧은 서명 URL. 내려받기 이름은 브라우저가 붙인다(Storage는 한글 이름을 두 번 인코딩한다). */
   async signedUrl(path, { expiresIn = 60 } = {}) {
     const { data, error } = await this.admin.storage.from(this.bucket).createSignedUrl(path, expiresIn);
-    if (error) throw new ChatError(404, '파일을 찾을 수 없어.');
+    if (error) throw new ChatError(404, '파일을 찾을 수 없어요.');
     return data.signedUrl;
   }
 

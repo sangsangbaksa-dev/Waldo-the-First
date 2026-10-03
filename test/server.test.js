@@ -219,3 +219,46 @@ test('스페이스를 지우면 멤버들에게 알린다', async () => {
   assert.equal((await a.call('DELETE', `/api/conversations/${space.id}`)).status, 200);
   assert.deepEqual(await realtime.next(`user:${b.user.id}`, 'conversation:removed'), { id: space.id });
 });
+
+test('프로필 사진: 내 경로에만, 다 올린 뒤에만 정할 수 있고 로그인한 사람은 볼 수 있다', async () => {
+  const a = await signup('photo@gmail.com', '사진');
+  const b = await signup('viewer@gmail.com', '보는사람');
+  assert.equal((await a.call('POST', '/api/me/avatar', { mime: 'image/svg+xml', size: 10 })).status, 400);
+  assert.equal((await a.call('POST', '/api/me/avatar', { mime: 'image/jpeg', size: 6 * 1024 * 1024 })).status, 413);
+  const { upload } = (await a.call('POST', '/api/me/avatar', { mime: 'image/jpeg', size: 100 })).body;
+  assert.ok(upload.path.startsWith(`avatars/${a.user.id}/`));
+  assert.equal((await a.call('PUT', '/api/me/avatar', { path: upload.path })).status, 400); // 아직 안 올림
+  assert.equal((await a.call('PUT', '/api/me/avatar', { path: `avatars/${b.user.id}/x` })).status, 400);
+  supabase.browserUpload(upload.path, upload.token, Buffer.from('jpg'), 'image/jpeg');
+  const me = (await a.call('PUT', '/api/me/avatar', { path: upload.path })).body;
+  assert.match(me.avatar, /^\/avatars\//);
+  const seen = await b.call('GET', me.avatar);
+  assert.equal(seen.status, 302);
+  assert.equal((await fetch(`${url}${me.avatar}`, { redirect: 'manual' })).status, 401);
+});
+
+test('고정과 전달이 실시간으로 알려지고, 전달한 첨부는 새로 복사된다', async () => {
+  const a = await signup('fwd-a@gmail.com', '가');
+  const b = await signup('fwd-b@gmail.com', '나');
+  const c = await signup('fwd-c@gmail.com', '다');
+  const dm = (await a.call('POST', '/api/conversations/direct', { emails: ['fwd-b@gmail.com'] })).body;
+  const space = (await a.call('POST', '/api/spaces', { name: '전달방', memberEmails: ['fwd-c@gmail.com'] })).body;
+
+  const { attachment, upload } = (await b.call('POST', '/api/uploads', { filename: '자료.pdf', mime: 'application/pdf', size: 3 })).body;
+  supabase.browserUpload(upload.path, upload.token, Buffer.from('pdf'), upload.contentType);
+  const original = (await b.call('POST', `/api/conversations/${dm.id}/messages`, { body: '자료예요', attachmentIds: [attachment.id] })).body;
+
+  assert.equal((await a.call('POST', `/api/messages/${original.id}/pin`)).body.pinned, true);
+  assert.deepEqual(await realtime.next(`user:${b.user.id}`, 'pins:changed'), { conversationId: dm.id });
+  assert.equal((await b.call('GET', `/api/conversations/${dm.id}/pins`)).body[0].pinnedBy, '가');
+
+  const fwd = await a.call('POST', `/api/messages/${original.id}/forward`, { conversationId: space.id, comment: '참고하세요' });
+  assert.equal(fwd.status, 201);
+  assert.equal(fwd.body.forwardedFrom, '나');
+  assert.equal(fwd.body.attachments[0].filename, '자료.pdf');
+  assert.notEqual(fwd.body.attachments[0].id, attachment.id);
+  const got = await realtime.next(`user:${c.user.id}`, 'message:new', (p) => p.message.forwardedFrom === '나');
+  assert.equal(got.message.body, '자료예요');
+  // 원래 대화 멤버가 아니면 전달할 수 없다.
+  assert.equal((await c.call('POST', `/api/messages/${original.id}/forward`, { conversationId: space.id })).status, 404);
+});

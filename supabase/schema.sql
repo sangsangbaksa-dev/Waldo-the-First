@@ -108,3 +108,18 @@ ALTER TABLE chat_mentions ENABLE ROW LEVEL SECURITY;
 ALTER TABLE chat_reactions ENABLE ROW LEVEL SECURITY;
 ALTER TABLE chat_stars ENABLE ROW LEVEL SECURITY;
 ALTER TABLE chat_attachments ENABLE ROW LEVEL SECURITY;
+
+-- ── 2차: 인용 답장, 전달, 메시지 고정 ─────────────────────
+-- 인용한 원래 메시지 (원래 메시지가 지워져도 인용 표시는 "삭제된 메시지"로 남는다)
+ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS quote_id TEXT REFERENCES chat_messages(id) ON DELETE SET NULL;
+-- 다른 대화에서 전달된 메시지라면 원래 보낸 사람 이름
+ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS forwarded_from TEXT;
+
+CREATE TABLE IF NOT EXISTS chat_pins (
+  conversation_id TEXT NOT NULL REFERENCES chat_conversations(id) ON DELETE CASCADE,
+  message_id      TEXT NOT NULL REFERENCES chat_messages(id) ON DELETE CASCADE,
+  pinned_by       TEXT REFERENCES chat_users(id) ON DELETE SET NULL,
+  pinned_at       BIGINT NOT NULL,
+  PRIMARY KEY (conversation_id, message_id)
+);
+ALTER TABLE chat_pins ENABLE ROW LEVEL SECURITY;

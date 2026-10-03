@@ -18,7 +18,7 @@ export function loadEnvFile() {
   if (!existsSync(envFile)) return;
   for (const [key, value] of Object.entries(parseEnv(readFileSync(envFile, 'utf8').replace(/^﻿/, '')))) {
     if (process.env[key] && process.env[key] !== value) {
-      console.warn(`알림: 컴퓨터에 이미 ${key} 환경 변수가 있어서 .env 값으로 바꿔 썼어.`);
+      console.warn(`알림: 컴퓨터에 이미 ${key} 환경 변수가 있어서 .env 값으로 바꿔 썼어요.`);
     }
     process.env[key] = value;
   }
@@ -27,7 +27,7 @@ export function loadEnvFile() {
 export class ConfigError extends Error {}
 
 function required(env, name) {
-  if (!env[name]) throw new ConfigError(`환경 변수 ${name}이(가) 없어. .env.example을 보고 채워 줘.`);
+  if (!env[name]) throw new ConfigError(`환경 변수 ${name}이(가) 없어요. .env.example을 보고 채워 주세요.`);
   return env[name];
 }
 

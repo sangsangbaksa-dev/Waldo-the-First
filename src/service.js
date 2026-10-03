@@ -8,6 +8,8 @@ export const LIMITS = {
   statusText: 80,
   pageSize: 50,
   attachmentsPerMessage: 10,
+  pinsPerConversation: 20,
+  quotePreview: 200,
 };
 
 export const STATUSES = ['auto', 'away', 'dnd'];
@@ -29,18 +31,30 @@ const fail = (status, message) => {
 
 function text(value, max, label, { required = true } = {}) {
   const v = typeof value === 'string' ? value.replace(/\s+/g, ' ').trim() : '';
-  if (required && !v) fail(400, `${label}을(를) 입력해 줘.`);
-  if (v.length > max) fail(400, `${label}은(는) ${max}자까지야.`);
+  if (required && !v) fail(400, `${label}을(를) 입력해 주세요.`);
+  if (v.length > max) fail(400, `${label}은(는) ${max}자까지 쓸 수 있어요.`);
   return v;
 }
 
 export function normalizeEmail(value) {
   const email = typeof value === 'string' ? value.trim().toLowerCase() : '';
-  if (!EMAIL.test(email)) fail(400, `올바른 이메일이 아니야: ${value}`);
+  if (!EMAIL.test(email)) fail(400, `올바른 이메일 주소가 아니에요: ${value}`);
   return email;
 }
 
 export const validateName = (value) => text(value, LIMITS.name, '이름');
+
+/** 프로필 사진은 Storage 경로로 저장하고, 화면에는 권한을 확인하는 /avatars/<id> 주소로 준다. */
+function avatarUrl(row) {
+  if (!row.avatar) return null;
+  if (/^https?:\/\//.test(row.avatar)) return row.avatar;
+  return `/avatars/${row.id}?v=${row.avatar.split('/').pop().slice(0, 8)}`;
+}
+
+/** 전달할 때는 멘션 토큰을 그냥 글자(@이름)로 바꿔서, 새 대화에서 다시 알림이 가지 않게 한다. */
+function plainMentions(body, users) {
+  return body.replace(MENTION, (_, id) => `@${id === 'all' ? 'all' : (users.get(id)?.name ?? '알 수 없음')}`);
+}
 
 function mentionedIn(body, memberIds, authorId) {
   const mentioned = new Set();
@@ -66,7 +80,7 @@ export class ChatService {
       id: row.id,
       email: row.email,
       name: row.name,
-      avatar: row.avatar,
+      avatar: avatarUrl(row),
       registered: Boolean(row.registered),
       status: row.status,
       statusText: row.status_text,
@@ -126,6 +140,18 @@ export class ChatService {
     return (await this.db.one('SELECT auth_id FROM chat_users WHERE id = ?', [userId]))?.auth_id ?? null;
   }
 
+  async avatarPath(userId) {
+    const row = await this.db.one('SELECT avatar FROM chat_users WHERE id = ?', [userId]);
+    return row?.avatar && !/^https?:/.test(row.avatar) ? row.avatar : null;
+  }
+
+  /** 프로필 사진 경로를 바꾸고, 지워야 할 예전 파일 경로를 돌려준다. */
+  async setAvatar(userId, path) {
+    const old = await this.avatarPath(userId);
+    await this.db.run('UPDATE chat_users SET avatar = ? WHERE id = ?', [path, userId]);
+    return { user: await this.getUser(userId), oldPath: old && old !== path ? old : null };
+  }
+
   async updateProfile(userId, { name }) {
     await this.db.run('UPDATE chat_users SET name = ? WHERE id = ?', [validateName(name), userId]);
     return this.getUser(userId);
@@ -145,7 +171,7 @@ export class ChatService {
   async setStatus(userId, { status, statusText }) {
     const user = await this.getUser(userId);
     const next = status ?? user.status;
-    if (!STATUSES.includes(next)) fail(400, '알 수 없는 상태야.');
+    if (!STATUSES.includes(next)) fail(400, '알 수 없는 상태예요.');
     const note =
       statusText === undefined ? user.statusText : text(statusText, LIMITS.statusText, '상태 메시지', { required: false });
     await this.db.run('UPDATE chat_users SET status = ?, status_text = ? WHERE id = ?', [next, note, userId]);
@@ -196,21 +222,21 @@ export class ChatService {
 
   async requireMember(userId, conversationId) {
     const member = await this.membership(userId, conversationId);
-    if (!member) fail(404, '대화를 찾을 수 없어.');
+    if (!member) fail(404, '대화를 찾을 수 없어요.');
     return member;
   }
 
   async requireManager(userId, conversationId) {
     const conversation = await this.conversationRow(conversationId);
     const member = await this.requireMember(userId, conversationId);
-    if (conversation.kind !== 'space') fail(400, '스페이스에서만 할 수 있어.');
-    if (member.role !== 'manager') fail(403, '스페이스 관리자만 할 수 있어.');
+    if (conversation.kind !== 'space') fail(400, '스페이스에서만 할 수 있어요.');
+    if (member.role !== 'manager') fail(403, '스페이스 관리자만 할 수 있어요.');
     return conversation;
   }
 
   async conversationRow(id) {
     const row = await this.db.one('SELECT * FROM chat_conversations WHERE id = ?', [id]);
-    if (!row) fail(404, '대화를 찾을 수 없어.');
+    if (!row) fail(404, '대화를 찾을 수 없어요.');
     return row;
   }
 
@@ -256,7 +282,7 @@ export class ChatService {
       const user = await this.ensureUser(email);
       if (user.id !== userId) others.push(user);
     }
-    if (others.length === 0) fail(400, '대화할 사람을 한 명 이상 골라 줘.');
+    if (others.length === 0) fail(400, '대화할 사람을 한 명 이상 골라 주세요.');
     const kind = others.length === 1 ? 'dm' : 'group';
     const key = `${kind}:${[userId, ...others.map((u) => u.id)].sort().join(',')}`;
 
@@ -280,7 +306,7 @@ export class ChatService {
   async createSpace(userId, { name, description = '', emoji = null, visibility = 'private', memberEmails = [] }) {
     const spaceName = text(name, LIMITS.spaceName, '스페이스 이름');
     const about = text(description, LIMITS.description, '설명', { required: false });
-    if (!['private', 'public'].includes(visibility)) fail(400, '공개 범위가 올바르지 않아.');
+    if (!['private', 'public'].includes(visibility)) fail(400, '공개 범위가 올바르지 않아요.');
     const emails = [...new Set((Array.isArray(memberEmails) ? memberEmails : []).map(normalizeEmail))];
 
     const id = randomUUID();
@@ -296,7 +322,7 @@ export class ChatService {
         if (user.id !== userId) await this.addMemberRow(db, id, user.id);
       }
     });
-    await this.systemMessage(id, `${(await this.getUser(userId)).name}님이 스페이스를 만들었어.`);
+    await this.systemMessage(id, `${(await this.getUser(userId)).name}님이 스페이스를 만들었어요.`);
     return this.getConversation(userId, id);
   }
 
@@ -311,7 +337,7 @@ export class ChatService {
       emoji: emoji === undefined ? conversation.emoji : emoji || null,
       visibility: visibility === undefined ? conversation.visibility : visibility,
     };
-    if (!['private', 'public'].includes(next.visibility)) fail(400, '공개 범위가 올바르지 않아.');
+    if (!['private', 'public'].includes(next.visibility)) fail(400, '공개 범위가 올바르지 않아요.');
     await this.db.run('UPDATE chat_conversations SET name = ?, description = ?, emoji = ?, visibility = ? WHERE id = ?', [
       next.name,
       next.description,
@@ -321,7 +347,7 @@ export class ChatService {
     ]);
     if (next.name !== conversation.name) {
       const actor = await this.getUser(userId);
-      await this.systemMessage(conversationId, `${actor.name}님이 스페이스 이름을 '${next.name}'(으)로 바꿨어.`);
+      await this.systemMessage(conversationId, `${actor.name}님이 스페이스 이름을 '${next.name}'(으)로 바꿨어요.`);
     }
     return this.getConversation(userId, conversationId);
   }
@@ -340,7 +366,7 @@ export class ChatService {
   async addMembers(userId, conversationId, emails) {
     const conversation = await this.conversationRow(conversationId);
     await this.requireMember(userId, conversationId);
-    if (conversation.kind === 'dm') fail(400, '1:1 대화에는 사람을 더할 수 없어. 새 그룹 대화를 만들어 줘.');
+    if (conversation.kind === 'dm') fail(400, '1:1 대화에는 사람을 추가할 수 없어요. 새 그룹 대화를 만들어 주세요.');
     const actor = await this.getUser(userId);
     const added = [];
     for (const email of [...new Set((Array.isArray(emails) ? emails : []).map(normalizeEmail))]) {
@@ -354,17 +380,17 @@ export class ChatService {
       if (conversation.kind === 'group') {
         await this.db.run('UPDATE chat_conversations SET dm_key = NULL WHERE id = ?', [conversationId]);
       }
-      await this.systemMessage(conversationId, `${actor.name}님이 ${added.map((u) => u.name).join(', ')}님을 추가했어.`);
+      await this.systemMessage(conversationId, `${actor.name}님이 ${added.map((u) => u.name).join(', ')}님을 추가했어요.`);
     }
     return added;
   }
 
   async joinSpace(userId, conversationId) {
     const conversation = await this.conversationRow(conversationId);
-    if (conversation.kind !== 'space' || conversation.visibility !== 'public') fail(404, '대화를 찾을 수 없어.');
+    if (conversation.kind !== 'space' || conversation.visibility !== 'public') fail(404, '대화를 찾을 수 없어요.');
     if (!(await this.membership(userId, conversationId))) {
       await this.addMemberRow(this.db, conversationId, userId);
-      await this.systemMessage(conversationId, `${(await this.getUser(userId)).name}님이 참여했어.`);
+      await this.systemMessage(conversationId, `${(await this.getUser(userId)).name}님이 참여했어요.`);
     }
     return this.getConversation(userId, conversationId);
   }
@@ -373,13 +399,13 @@ export class ChatService {
   async removeMember(userId, conversationId, targetId) {
     const conversation = await this.conversationRow(conversationId);
     const self = userId === targetId;
-    if (conversation.kind === 'dm') fail(400, '1:1 대화는 나갈 수 없어. 대화 숨기기를 써 줘.');
+    if (conversation.kind === 'dm') fail(400, '1:1 대화는 나갈 수 없어요. 대신 대화 숨기기를 사용해 주세요.');
     if (self) await this.requireMember(userId, conversationId);
     else if (conversation.kind === 'space') await this.requireManager(userId, conversationId);
-    else fail(403, '그룹 대화에서는 스스로만 나갈 수 있어.');
+    else fail(403, '그룹 대화에서는 본인만 나갈 수 있어요.');
 
     const target = await this.membership(targetId, conversationId);
-    if (!target) fail(404, '그 사람은 이 대화에 없어.');
+    if (!target) fail(404, '그 사람은 이 대화에 없어요.');
 
     await this.db.tx(async (db) => {
       await db.run('DELETE FROM chat_members WHERE conversation_id = ? AND user_id = ?', [conversationId, targetId]);
@@ -398,16 +424,16 @@ export class ChatService {
 
     const name = (await this.getUser(targetId)).name;
     const actor = (await this.getUser(userId)).name;
-    await this.systemMessage(conversationId, self ? `${name}님이 나갔어.` : `${actor}님이 ${name}님을 내보냈어.`);
+    await this.systemMessage(conversationId, self ? `${name}님이 나갔어요.` : `${actor}님이 ${name}님을 내보냈어요.`);
   }
 
   async setRole(userId, conversationId, targetId, role) {
     await this.requireManager(userId, conversationId);
-    if (!['manager', 'member'].includes(role)) fail(400, '알 수 없는 역할이야.');
+    if (!['manager', 'member'].includes(role)) fail(400, '알 수 없는 역할이에요.');
     const target = await this.membership(targetId, conversationId);
-    if (!target) fail(404, '그 사람은 이 대화에 없어.');
+    if (!target) fail(404, '그 사람은 이 대화에 없어요.');
     if (role === 'member' && target.role === 'manager' && (await this.managerCount(conversationId)) <= 1) {
-      fail(400, '스페이스에는 관리자가 한 명 이상 있어야 해.');
+      fail(400, '스페이스에는 관리자가 한 명 이상 있어야 해요.');
     }
     await this.db.run('UPDATE chat_members SET role = ? WHERE conversation_id = ? AND user_id = ?', [
       role,
@@ -468,8 +494,9 @@ export class ChatService {
           WHERE conversation_id = ? AND thread_id IS NULL AND kind = 'user' AND NOT deleted
             AND created_at > ? AND user_id <> ?) AS unread,
          (SELECT COUNT(*)::int FROM chat_mentions x JOIN chat_messages m ON m.id = x.message_id
-          WHERE m.conversation_id = ? AND x.user_id = ? AND m.created_at > ? AND NOT m.deleted) AS mentions`,
-      [row.id, row.last_read_at, userId, row.id, userId, row.last_read_at],
+          WHERE m.conversation_id = ? AND x.user_id = ? AND m.created_at > ? AND NOT m.deleted) AS mentions,
+         (SELECT COUNT(*)::int FROM chat_pins WHERE conversation_id = ?) AS pins`,
+      [row.id, row.last_read_at, userId, row.id, userId, row.last_read_at, row.id],
     );
     const last = await this.db.one(
       `SELECT m.body, m.kind, m.deleted, u.name FROM chat_messages m LEFT JOIN chat_users u ON u.id = m.user_id
@@ -494,6 +521,7 @@ export class ChatService {
       lastReadAt: row.last_read_at,
       unread: counts.unread,
       mentionCount: counts.mentions,
+      pinnedCount: counts.pins,
       members,
       lastMessage: last
         ? { author: last.name, body: last.deleted ? '' : last.body, kind: last.kind, deleted: Boolean(last.deleted) }
@@ -541,7 +569,7 @@ export class ChatService {
 
   async messageRow(messageId) {
     const row = await this.db.one('SELECT * FROM chat_messages WHERE id = ?', [messageId]);
-    if (!row) fail(404, '메시지를 찾을 수 없어.');
+    if (!row) fail(404, '메시지를 찾을 수 없어요.');
     return row;
   }
 
@@ -550,7 +578,8 @@ export class ChatService {
     if (rows.length === 0) return [];
     const ids = rows.map((r) => r.id);
 
-    const [reactionRows, attachmentRows, replyRows, starRows] = await Promise.all([
+    const quoteIds = [...new Set(rows.map((r) => r.quote_id).filter(Boolean))];
+    const [reactionRows, attachmentRows, replyRows, starRows, quoteRows, pinRows] = await Promise.all([
       this.db.all(
         'SELECT message_id, emoji, user_id FROM chat_reactions WHERE message_id = ANY(?::text[]) ORDER BY created_at',
         [ids],
@@ -566,6 +595,15 @@ export class ChatService {
         [ids],
       ),
       this.db.all('SELECT message_id FROM chat_stars WHERE user_id = ? AND message_id = ANY(?::text[])', [viewerId, ids]),
+      quoteIds.length
+        ? this.db.all(
+            `SELECT m.id, m.user_id, m.body, m.deleted, m.created_at,
+                    (SELECT COUNT(*)::int FROM chat_attachments a WHERE a.message_id = m.id) AS files
+             FROM chat_messages m WHERE m.id = ANY(?::text[])`,
+            [quoteIds],
+          )
+        : [],
+      this.db.all('SELECT message_id FROM chat_pins WHERE message_id = ANY(?::text[])', [ids]),
     ]);
 
     const mentionIds = rows.flatMap((r) => (r.deleted ? [] : [...r.body.matchAll(MENTION)].map((m) => m[1])));
@@ -574,7 +612,23 @@ export class ChatService {
       ...reactionRows.map((r) => r.user_id),
       ...replyRows.flatMap((r) => r.people ?? []),
       ...mentionIds.filter((id) => id !== 'all'),
+      ...quoteRows.map((q) => q.user_id),
+      ...quoteRows.flatMap((q) => [...q.body.matchAll(MENTION)].map((m) => m[1])).filter((id) => id !== 'all'),
     ]);
+    const quotes = new Map(
+      quoteRows.map((q) => [
+        q.id,
+        {
+          id: q.id,
+          author: users.get(q.user_id)?.name ?? '알 수 없음',
+          body: q.deleted ? '' : plainMentions(q.body, users).slice(0, LIMITS.quotePreview),
+          deleted: Boolean(q.deleted),
+          files: q.deleted ? 0 : q.files,
+          createdAt: q.created_at,
+        },
+      ]),
+    );
+    const pinned = new Set(pinRows.map((r) => r.message_id));
 
     const reactions = new Map();
     for (const r of reactionRows) {
@@ -629,6 +683,9 @@ export class ChatService {
         attachments: row.deleted ? [] : (attachments.get(row.id) ?? []),
         replies: replies.get(row.id) ?? { count: 0, lastAt: null, people: [] },
         starred: starred.has(row.id),
+        pinned: pinned.has(row.id),
+        quote: row.quote_id ? (quotes.get(row.quote_id) ?? null) : null,
+        forwardedFrom: row.forwarded_from ?? null,
       };
     });
   }
@@ -643,7 +700,7 @@ export class ChatService {
     await this.requireMember(userId, conversationId);
     if (threadId) {
       const root = await this.messageRow(threadId);
-      if (root.conversation_id !== conversationId) fail(404, '스레드를 찾을 수 없어.');
+      if (root.conversation_id !== conversationId) fail(404, '스레드를 찾을 수 없어요.');
       const replies = await this.db.all('SELECT * FROM chat_messages WHERE thread_id = ? ORDER BY created_at', [threadId]);
       return { messages: await this.hydrate(userId, [root, ...replies]), hasMore: false };
     }
@@ -660,23 +717,30 @@ export class ChatService {
    * 메시지를 보낸다. 본문의 <@id>, <@all> 토큰으로 멘션을 기록한다.
    * 돌려주는 값에 멘션된 사람 목록을 함께 실어 알림에 쓴다.
    */
-  async sendMessage(userId, conversationId, { body = '', threadId = null, attachmentIds = [] }) {
+  async sendMessage(userId, conversationId, { body = '', threadId = null, attachmentIds = [], quoteId = null }, { forwardedFrom = null } = {}) {
     await this.requireMember(userId, conversationId);
     const content = typeof body === 'string' ? body.trim() : '';
-    if (content.length > LIMITS.message) fail(400, `메시지는 ${LIMITS.message}자까지야.`);
+    if (content.length > LIMITS.message) fail(400, `메시지는 ${LIMITS.message}자까지 쓸 수 있어요.`);
     const ids = [...new Set(Array.isArray(attachmentIds) ? attachmentIds : [])];
-    if (ids.length > LIMITS.attachmentsPerMessage) fail(400, `파일은 한 번에 ${LIMITS.attachmentsPerMessage}개까지야.`);
-    if (!content && ids.length === 0) fail(400, '빈 메시지는 보낼 수 없어.');
+    if (ids.length > LIMITS.attachmentsPerMessage) fail(400, `파일은 한 번에 ${LIMITS.attachmentsPerMessage}개까지 보낼 수 있어요.`);
+    if (!content && ids.length === 0) fail(400, '빈 메시지는 보낼 수 없어요.');
 
     if (threadId) {
       const root = await this.messageRow(threadId);
-      if (root.conversation_id !== conversationId || root.thread_id) fail(400, '답장할 수 없는 메시지야.');
+      if (root.conversation_id !== conversationId || root.thread_id) fail(400, '답장할 수 없는 메시지예요.');
+    }
+
+    if (quoteId) {
+      const quoted = await this.db.one('SELECT conversation_id, kind, deleted FROM chat_messages WHERE id = ?', [quoteId]);
+      if (!quoted || quoted.conversation_id !== conversationId || quoted.kind !== 'user' || quoted.deleted) {
+        fail(400, '인용할 수 없는 메시지예요.');
+      }
     }
 
     if (ids.length) {
       const files = await this.db.all('SELECT * FROM chat_attachments WHERE id = ANY(?::text[])', [ids]);
       const usable = files.filter((f) => f.user_id === userId && !f.message_id);
-      if (usable.length !== ids.length) fail(400, '첨부 파일을 찾을 수 없어.');
+      if (usable.length !== ids.length) fail(400, '첨부 파일을 찾을 수 없어요.');
     }
 
     const mentioned = mentionedIn(content, new Set(await this.memberIds(conversationId)), userId);
@@ -684,8 +748,9 @@ export class ChatService {
     const at = this.now();
     await this.db.tx(async (db) => {
       await db.run(
-        'INSERT INTO chat_messages (id, conversation_id, user_id, thread_id, body, created_at) VALUES (?, ?, ?, ?, ?, ?)',
-        [id, conversationId, userId, threadId, content, at],
+        `INSERT INTO chat_messages (id, conversation_id, user_id, thread_id, body, created_at, quote_id, forwarded_from)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        [id, conversationId, userId, threadId, content, at, quoteId || null, forwardedFrom],
       );
       if (ids.length) {
         // 다른 요청이 같은 첨부를 먼저 가져갔으면 여기서 막힌다.
@@ -693,7 +758,7 @@ export class ChatService {
           'UPDATE chat_attachments SET message_id = ? WHERE id = ANY(?::text[]) AND user_id = ? AND message_id IS NULL RETURNING id',
           [id, ids, userId],
         );
-        if (claimed.length !== ids.length) fail(400, '첨부 파일을 찾을 수 없어.');
+        if (claimed.length !== ids.length) fail(400, '첨부 파일을 찾을 수 없어요.');
       }
       for (const uid of mentioned) await db.run('INSERT INTO chat_mentions (message_id, user_id) VALUES (?, ?)', [id, uid]);
       await db.run('UPDATE chat_conversations SET last_message_at = ? WHERE id = ?', [at, conversationId]);
@@ -712,11 +777,11 @@ export class ChatService {
   async editMessage(userId, messageId, body) {
     const row = await this.messageRow(messageId);
     await this.requireMember(userId, row.conversation_id);
-    if (row.user_id !== userId || row.kind !== 'user') fail(403, '내 메시지만 고칠 수 있어.');
-    if (row.deleted) fail(400, '삭제된 메시지야.');
+    if (row.user_id !== userId || row.kind !== 'user') fail(403, '내가 보낸 메시지만 수정할 수 있어요.');
+    if (row.deleted) fail(400, '삭제된 메시지예요.');
     const content = typeof body === 'string' ? body.trim() : '';
-    if (!content) fail(400, '빈 메시지로 고칠 수 없어. 지우려면 삭제를 써 줘.');
-    if (content.length > LIMITS.message) fail(400, `메시지는 ${LIMITS.message}자까지야.`);
+    if (!content) fail(400, '내용을 모두 지울 수는 없어요. 지우려면 삭제를 사용해 주세요.');
+    if (content.length > LIMITS.message) fail(400, `메시지는 ${LIMITS.message}자까지 쓸 수 있어요.`);
 
     const mentioned = mentionedIn(content, new Set(await this.memberIds(row.conversation_id)), userId);
     await this.db.tx(async (db) => {
@@ -734,23 +799,73 @@ export class ChatService {
     const member = await this.requireMember(userId, row.conversation_id);
     const conversation = await this.conversationRow(row.conversation_id);
     const canModerate = conversation.kind === 'space' && member.role === 'manager';
-    if (row.kind !== 'user' || (row.user_id !== userId && !canModerate)) fail(403, '이 메시지는 지울 수 없어.');
+    if (row.kind !== 'user' || (row.user_id !== userId && !canModerate)) fail(403, '이 메시지는 삭제할 수 없어요.');
     const files = (await this.db.all('SELECT path FROM chat_attachments WHERE message_id = ?', [messageId])).map((f) => f.path);
     await this.db.tx(async (db) => {
       await db.run("UPDATE chat_messages SET deleted = TRUE, body = '' WHERE id = ?", [messageId]);
-      for (const table of ['chat_attachments', 'chat_reactions', 'chat_mentions', 'chat_stars']) {
+      for (const table of ['chat_attachments', 'chat_reactions', 'chat_mentions', 'chat_stars', 'chat_pins']) {
         await db.run(`DELETE FROM ${table} WHERE message_id = ?`, [messageId]);
       }
     });
     return { message: await this.getMessage(userId, messageId), files };
   }
 
+  /**
+   * 다른 대화로 전달할 준비: 권한을 확인하고, 새 메시지에 쓸 본문과 복사할 첨부 목록을 돌려준다.
+   * (첨부는 Storage에서 복사해야 해서 실제 보내기는 서버 라우트가 마무리한다.)
+   */
+  async prepareForward(userId, messageId, targetConversationId) {
+    const row = await this.messageRow(messageId);
+    await this.requireMember(userId, row.conversation_id);
+    await this.requireMember(userId, targetConversationId);
+    if (row.kind !== 'user' || row.deleted) fail(400, '전달할 수 없는 메시지예요.');
+    const users = await this.usersById([row.user_id, ...[...row.body.matchAll(MENTION)].map((m) => m[1])]);
+    const files = await this.db.all(
+      'SELECT filename, mime, size, path FROM chat_attachments WHERE message_id = ? ORDER BY created_at',
+      [messageId],
+    );
+    return {
+      body: plainMentions(row.body, users),
+      files,
+      forwardedFrom: row.forwarded_from ?? users.get(row.user_id)?.name ?? '알 수 없음',
+    };
+  }
+
+  /** 메시지 고정/해제. 대화 멤버라면 누구나 할 수 있다. */
+  async togglePin(userId, messageId) {
+    const row = await this.messageRow(messageId);
+    await this.requireMember(userId, row.conversation_id);
+    if (row.kind !== 'user' || row.deleted) fail(400, '고정할 수 없는 메시지예요.');
+    const removed = await this.db.all('DELETE FROM chat_pins WHERE message_id = ? RETURNING message_id', [messageId]);
+    if (!removed.length) {
+      const { n } = await this.db.one('SELECT COUNT(*)::int AS n FROM chat_pins WHERE conversation_id = ?', [row.conversation_id]);
+      if (n >= LIMITS.pinsPerConversation) fail(400, `메시지는 대화마다 ${LIMITS.pinsPerConversation}개까지 고정할 수 있어요.`);
+      await this.db.run(
+        'INSERT INTO chat_pins (conversation_id, message_id, pinned_by, pinned_at) VALUES (?, ?, ?, ?) ON CONFLICT DO NOTHING',
+        [row.conversation_id, messageId, userId, this.now()],
+      );
+    }
+    return this.getMessage(userId, messageId);
+  }
+
+  async listPins(userId, conversationId) {
+    await this.requireMember(userId, conversationId);
+    const rows = await this.db.all(
+      `SELECT m.*, p.pinned_at, p.pinned_by FROM chat_pins p JOIN chat_messages m ON m.id = p.message_id
+       WHERE p.conversation_id = ? ORDER BY p.pinned_at DESC`,
+      [conversationId],
+    );
+    const pinners = await this.usersById(rows.map((r) => r.pinned_by));
+    const messages = await this.hydrate(userId, rows);
+    return messages.map((m, i) => ({ ...m, pinnedAt: rows[i].pinned_at, pinnedBy: pinners.get(rows[i].pinned_by)?.name ?? null }));
+  }
+
   async toggleReaction(userId, messageId, emoji) {
     const row = await this.messageRow(messageId);
     await this.requireMember(userId, row.conversation_id);
-    if (row.deleted || row.kind !== 'user') fail(400, '이 메시지에는 반응할 수 없어.');
+    if (row.deleted || row.kind !== 'user') fail(400, '이 메시지에는 반응할 수 없어요.');
     const value = typeof emoji === 'string' ? emoji.trim() : '';
-    if (!value || value.length > 16) fail(400, '이모티콘이 올바르지 않아.');
+    if (!value || value.length > 16) fail(400, '이모티콘이 올바르지 않아요.');
     const removed = await this.db.all(
       'DELETE FROM chat_reactions WHERE message_id = ? AND user_id = ? AND emoji = ? RETURNING emoji',
       [messageId, userId, value],
@@ -767,7 +882,7 @@ export class ChatService {
   async toggleStar(userId, messageId) {
     const row = await this.messageRow(messageId);
     await this.requireMember(userId, row.conversation_id);
-    if (row.deleted || row.kind !== 'user') fail(400, '이 메시지는 별표할 수 없어.');
+    if (row.deleted || row.kind !== 'user') fail(400, '이 메시지는 별표표시할 수 없어요.');
     const removed = await this.db.all('DELETE FROM chat_stars WHERE message_id = ? AND user_id = ? RETURNING message_id', [
       messageId,
       userId,
@@ -847,9 +962,9 @@ export class ChatService {
        LEFT JOIN chat_messages m ON m.id = a.message_id WHERE a.id = ?`,
       [id],
     );
-    if (!file) fail(404, '파일을 찾을 수 없어.');
+    if (!file) fail(404, '파일을 찾을 수 없어요.');
     if (file.user_id !== userId && !(file.conversation_id && (await this.membership(userId, file.conversation_id)))) {
-      fail(404, '파일을 찾을 수 없어.');
+      fail(404, '파일을 찾을 수 없어요.');
     }
     return file;
   }

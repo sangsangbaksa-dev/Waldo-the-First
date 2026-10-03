@@ -62,6 +62,11 @@ export class FakeSupabase {
     this.files.set(path, { buffer, contentType });
   }
 
+  async copy(from, to) {
+    if (!this.files.has(from)) throw new ChatError(404, '파일을 찾을 수 없어요.');
+    this.files.set(to, { ...this.files.get(from) });
+  }
+
   async exists(path) {
     return this.files.has(path);
   }

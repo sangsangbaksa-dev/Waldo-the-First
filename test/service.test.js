@@ -122,7 +122,7 @@ test('수정, 삭제, 반응, 별표, 검색', async () => {
   const dm = (await service.openDirect(a.id, ['b@gmail.com'])).conversation;
   const { message } = await service.sendMessage(a.id, dm.id, { body: '점심 뭐 먹지' });
 
-  await assert.rejects(service.editMessage(b.id, message.id, 'x'), /내 메시지/);
+  await assert.rejects(service.editMessage(b.id, message.id, 'x'), /내가 보낸 메시지만/);
   assert.equal((await service.editMessage(a.id, message.id, '저녁 뭐 먹지')).body, '저녁 뭐 먹지');
 
   let reacted = await service.toggleReaction(b.id, message.id, '👍');
@@ -137,7 +137,7 @@ test('수정, 삭제, 반응, 별표, 검색', async () => {
   assert.equal((await service.search(b.id, '저녁', { conversationId: dm.id })).length, 1);
   assert.equal((await service.search(b.id, '100%')).length, 0);
 
-  await assert.rejects(service.deleteMessage(b.id, message.id), /지울 수 없어/);
+  await assert.rejects(service.deleteMessage(b.id, message.id), /삭제할 수 없어요/);
   const deleted = (await service.deleteMessage(a.id, message.id)).message;
   assert.equal(deleted.deleted, true);
   assert.equal(deleted.body, '');
@@ -181,4 +181,66 @@ test('세션: 만료되면 쓸 수 없고, 비밀번호를 바꾸면 다른 기�
   assert.equal(await service.userForSession(two), null);
   now = 2000;
   assert.equal(await service.userForSession(one), null);
+});
+
+test('인용 답장: 같은 대화의 메시지만 인용하고, 원래 메시지 요약이 붙는다', async () => {
+  const { service, a, b } = await setup();
+  const dm = (await service.openDirect(a.id, ['b@gmail.com'])).conversation;
+  const other = (await service.openDirect(a.id, ['c@gmail.com'])).conversation;
+  const { message: original } = await service.sendMessage(b.id, dm.id, { body: `<@${a.id}> 내일 발표 자료 있어요?` });
+  const { message: reply } = await service.sendMessage(a.id, dm.id, { body: '네, 보내 드릴게요', quoteId: original.id });
+  assert.deepEqual(
+    { author: reply.quote.author, body: reply.quote.body, deleted: reply.quote.deleted },
+    { author: '비', body: '@에이 내일 발표 자료 있어요?', deleted: false },
+  );
+  await assert.rejects(service.sendMessage(a.id, other.id, { body: 'x', quoteId: original.id }), /인용할 수 없는/);
+  await service.deleteMessage(b.id, original.id);
+  const [, after] = (await service.listMessages(a.id, dm.id)).messages.filter((m) => m.kind === 'user');
+  assert.equal(after.quote.deleted, true);
+  assert.equal(after.quote.body, '');
+});
+
+test('전달: 두 대화의 멤버여야 하고, 멘션은 글자로 바뀌고 원래 작성자를 남긴다', async () => {
+  const { service, a, b, c } = await setup();
+  const dm = (await service.openDirect(a.id, ['b@gmail.com'])).conversation;
+  const space = await service.createSpace(a.id, { name: '팀', memberEmails: ['c@gmail.com'] });
+  const { message } = await service.sendMessage(b.id, dm.id, { body: `<@${a.id}> 공지 확인해 주세요` });
+  const prepared = await service.prepareForward(a.id, message.id, space.id);
+  assert.equal(prepared.body, '@에이 공지 확인해 주세요');
+  assert.equal(prepared.forwardedFrom, '비');
+  const { message: forwarded, mentioned } = await service.sendMessage(a.id, space.id, { body: prepared.body }, { forwardedFrom: prepared.forwardedFrom });
+  assert.equal(forwarded.forwardedFrom, '비');
+  assert.deepEqual(mentioned, []);
+  // 전달할 곳의 멤버가 아니면 안 된다.
+  await assert.rejects(service.prepareForward(b.id, message.id, space.id), /찾을 수 없어요/);
+  // 다시 전달해도 처음 작성자가 남는다.
+  assert.equal((await service.prepareForward(c.id, forwarded.id, space.id)).forwardedFrom, '비');
+});
+
+test('메시지 고정: 고정/해제, 목록, 삭제하면 고정도 풀린다', async () => {
+  const { service, a, b } = await setup();
+  const dm = (await service.openDirect(a.id, ['b@gmail.com'])).conversation;
+  const { message: m1 } = await service.sendMessage(a.id, dm.id, { body: '공지 1' });
+  const { message: m2 } = await service.sendMessage(b.id, dm.id, { body: '공지 2' });
+  assert.equal((await service.togglePin(a.id, m1.id)).pinned, true);
+  assert.equal((await service.togglePin(b.id, m2.id)).pinned, true);
+  const pins = await service.listPins(a.id, dm.id);
+  assert.deepEqual(pins.map((p) => [p.body, p.pinnedBy]), [['공지 2', '비'], ['공지 1', '에이']]);
+  assert.equal((await service.getConversation(a.id, dm.id)).pinnedCount, 2);
+  assert.equal((await service.togglePin(a.id, m1.id)).pinned, false);
+  await service.deleteMessage(b.id, m2.id);
+  assert.equal((await service.listPins(a.id, dm.id)).length, 0);
+  await assert.rejects(service.togglePin(a.id, m2.id), /고정할 수 없는/);
+});
+
+test('프로필 사진: 경로를 저장하고, 화면에는 권한을 확인하는 주소로 준다', async () => {
+  const { service, a } = await setup();
+  const first = await service.setAvatar(a.id, `avatars/${a.id}/one`);
+  assert.equal(first.oldPath, null);
+  assert.match(first.user.avatar, new RegExp(`^/avatars/${a.id}\\?v=`));
+  const second = await service.setAvatar(a.id, `avatars/${a.id}/two`);
+  assert.equal(second.oldPath, `avatars/${a.id}/one`);
+  assert.equal(await service.avatarPath(a.id), `avatars/${a.id}/two`);
+  const cleared = await service.setAvatar(a.id, null);
+  assert.equal(cleared.user.avatar, null);
 });

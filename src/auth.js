@@ -21,9 +21,9 @@ export function parseCookies(header = '') {
 
 export function validatePassword(value) {
   if (typeof value !== 'string' || value.length < PASSWORD_MIN) {
-    throw new ChatError(400, `비밀번호는 ${PASSWORD_MIN}자 이상이어야 해.`);
+    throw new ChatError(400, `비밀번호는 ${PASSWORD_MIN}자 이상이어야 해요.`);
   }
-  if (value.length > 72) throw new ChatError(400, '비밀번호는 72자까지야.');
+  if (value.length > 72) throw new ChatError(400, '비밀번호는 72자까지 쓸 수 있어요.');
   return value;
 }
 
@@ -72,12 +72,12 @@ export function mountAuth(app, { service, supabase, config, signupLimiter = new 
   };
 
   app.post('/auth/signup', async (req, res) => {
-    if (!signupLimiter.allow(req.ip)) throw new ChatError(429, '가입 시도가 너무 많아. 잠시 뒤에 다시 해 줘.');
+    if (!signupLimiter.allow(req.ip)) throw new ChatError(429, '가입 시도가 너무 많아요. 잠시 뒤에 다시 시도해 주세요.');
     const name = validateName(req.body?.name);
     const email = normalizeEmail(req.body?.email);
     const password = validatePassword(req.body?.password);
-    if (!emailAllowed(config, email)) throw new ChatError(403, '이 이메일 도메인으로는 가입할 수 없어.');
-    if (await service.emailRegistered(email)) throw new ChatError(409, '이미 가입된 이메일이야. 로그인해 줘.');
+    if (!emailAllowed(config, email)) throw new ChatError(403, '이 이메일 도메인으로는 가입할 수 없어요.');
+    if (await service.emailRegistered(email)) throw new ChatError(409, '이미 가입된 이메일이에요. 로그인해 주세요.');
 
     const account = await supabase.createUser({ email, password, name });
     const user = await service.linkAccount({ authId: account.id, email, name });
@@ -87,8 +87,8 @@ export function mountAuth(app, { service, supabase, config, signupLimiter = new 
 
   app.post('/auth/session', async (req, res) => {
     const account = await supabase.userFromAccessToken(req.body?.accessToken);
-    if (!account?.email) throw new ChatError(401, '로그인 정보를 확인할 수 없어. 다시 로그인해 줘.');
-    if (!emailAllowed(config, account.email)) throw new ChatError(403, '이 사이트에 들어올 수 없는 계정이야.');
+    if (!account?.email) throw new ChatError(401, '로그인 정보를 확인할 수 없어요. 다시 로그인해 주세요.');
+    if (!emailAllowed(config, account.email)) throw new ChatError(403, '이 사이트를 이용할 수 없는 계정이에요.');
     const user = await service.linkAccount({ authId: account.id, email: account.email, name: account.name });
     await startSession(res, user);
     res.json({ user });

@@ -35,9 +35,9 @@ async function api(method, path, body) {
   const data = res.headers.get('content-type')?.includes('json') ? await res.json() : null;
   if (res.status === 401 && path.startsWith('/api/') && path !== '/api/me/password') {
     location.reload();
-    throw new Error('로그인이 필요해.');
+    throw new Error('로그인이 필요해요.');
   }
-  if (!res.ok) throw new Error(data?.error ?? '요청에 실패했어.');
+  if (!res.ok) throw new Error(data?.error ?? '요청을 처리하지 못했어요.');
   return data;
 }
 
@@ -111,6 +111,12 @@ function dayLabel(ms) {
   return dayFormat.format(d);
 }
 
+/** "오늘 만든", "어제 만든", "10월 3일 (금)에 만든"처럼 자연스럽게. */
+function createdLabel(ms) {
+  const label = dayLabel(ms);
+  return label === '오늘' || label === '어제' ? label : `${label}에`;
+}
+
 function shortTime(ms) {
   const d = new Date(ms);
   return d.toDateString() === new Date().toDateString() ? timeFormat.format(d) : dayFormat.format(d);
@@ -171,9 +177,24 @@ const activeConversation = () =>
 
 async function boot() {
   state.config = await api('GET', '/api/config');
+  // 비밀번호 재설정 메일의 링크로 들어오면 주소 뒤(#)에 일회용 로그인 정보가 붙어 온다.
+  const hashParams = new URLSearchParams(location.hash.replace(/^#/, ''));
+  const recovery = hashParams.get('type') === 'recovery' && hashParams.has('access_token');
+  const linkError = hashParams.get('error_description');
   sb = supabase.createClient(state.config.supabase.url, state.config.supabase.anonKey, {
-    auth: { storageKey: 'waldo-chat-auth', persistSession: true, autoRefreshToken: true, detectSessionInUrl: false },
+    auth: { storageKey: 'waldo-chat-auth', persistSession: true, autoRefreshToken: true, detectSessionInUrl: recovery, flowType: 'implicit' },
   });
+  if (recovery) {
+    const { data } = await sb.auth.getSession();
+    history.replaceState(null, '', location.pathname);
+    if (data.session) return showLogin('', 'reset');
+    return showLogin('재설정 링크가 만료됐거나 이미 사용됐어요. 다시 요청해 주세요.', 'forgot');
+  }
+  if (linkError) {
+    history.replaceState(null, '', location.pathname);
+    return showLogin('재설정 링크가 만료됐거나 이미 사용됐어요. 다시 요청해 주세요.', 'forgot');
+  }
+
   const { user: me } = await api('GET', '/api/session');
   if (!me) return showLogin();
 
@@ -181,7 +202,7 @@ async function boot() {
   const { data } = await sb.auth.getSession();
   if (!data.session || data.session.user.email?.toLowerCase() !== me.email) {
     await api('POST', '/auth/logout').catch(() => {});
-    return showLogin('실시간 연결을 위해 한 번만 다시 로그인해 줘.');
+    return showLogin('실시간 연결을 위해 한 번만 다시 로그인해 주세요.');
   }
 
   state.me = me;
@@ -199,19 +220,30 @@ async function boot() {
   window.addEventListener('hashchange', route);
 }
 
-function showLogin(message = '') {
+function showLogin(message = '', initialForm = 'signin') {
   $('#login').hidden = false;
   const error = $('#login-error');
-  error.textContent = message;
+  const notice = $('#login-notice');
   const tabs = document.querySelectorAll('.login-tabs [data-tab]');
-  const show = (tab) => {
-    for (const t of tabs) t.classList.toggle('on', t.dataset.tab === tab);
-    $('#signin-form').hidden = tab !== 'signin';
-    $('#signup-form').hidden = tab !== 'signup';
-    error.textContent = '';
-    $(`#${tab}-form input`).focus();
+  const forms = ['signin', 'signup', 'forgot', 'reset'];
+  const show = (form, { keepMessage = false } = {}) => {
+    for (const t of tabs) t.classList.toggle('on', t.dataset.tab === form);
+    $('.login-tabs').hidden = form === 'reset';
+    for (const f of forms) $(`#${f}-form`).hidden = f !== form;
+    if (!keepMessage) {
+      error.textContent = '';
+      notice.hidden = true;
+    }
+    $(`#${form}-form input`)?.focus();
   };
   for (const t of tabs) t.addEventListener('click', () => show(t.dataset.tab));
+  $('#forgot-link').addEventListener('click', () => {
+    show('forgot');
+    $('#forgot-form [name=email]').value = $('#signin-form [name=email]').value;
+  });
+  $('#forgot-form [data-back]').addEventListener('click', () => show('signin'));
+  show(initialForm);
+  error.textContent = message;
 
   const busy = (form, on) => {
     form.querySelector('[type=submit]').disabled = on;
@@ -222,9 +254,9 @@ function showLogin(message = '') {
   const signIn = async (email, password) => {
     const { data, error: failure } = await sb.auth.signInWithPassword({ email: String(email).trim(), password });
     if (failure) {
-      if (failure.status === 429) throw new Error('로그인 시도가 너무 많아. 잠시 뒤에 다시 해 줘.');
-      if (failure.code === 'invalid_credentials' || failure.status === 400) throw new Error('이메일 또는 비밀번호가 맞지 않아.');
-      throw new Error('로그인 서버에 연결하지 못했어.');
+      if (failure.status === 429) throw new Error('로그인 시도가 너무 많아요. 잠시 뒤에 다시 시도해 주세요.');
+      if (failure.code === 'invalid_credentials' || failure.status === 400) throw new Error('이메일 또는 비밀번호가 맞지 않아요.');
+      throw new Error('로그인 서버에 연결하지 못했어요.');
     }
     await api('POST', '/auth/session', { accessToken: data.session.access_token });
   };
@@ -238,7 +270,52 @@ function showLogin(message = '') {
       await signIn(form.get('email'), form.get('password'));
       location.reload();
     } catch (err) {
-      error.textContent = err.message === 'Failed to fetch' ? '로그인 서버에 연결하지 못했어.' : err.message;
+      error.textContent = err.message === 'Failed to fetch' ? '로그인 서버에 연결하지 못했어요.' : err.message;
+      busy(event.target, false);
+    }
+  });
+
+  // 재설정 메일 요청: 메일 속 링크를 누르면 이 사이트로 돌아와 새 비밀번호를 정한다.
+  $('#forgot-form').addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const email = String(new FormData(event.target).get('email')).trim();
+    error.textContent = '';
+    busy(event.target, true);
+    const { error: failure } = await sb.auth.resetPasswordForEmail(email, { redirectTo: `${location.origin}/` });
+    busy(event.target, false);
+    if (failure) {
+      error.textContent = failure.status === 429
+        ? '메일을 너무 자주 요청하셨어요. 잠시 뒤에 다시 시도해 주세요.'
+        : `메일을 보내지 못했어요. (${failure.message})`;
+      return;
+    }
+    show('signin', { keepMessage: true });
+    notice.hidden = false;
+    notice.textContent = `${email}로 재설정 링크를 보냈어요. 메일함(스팸함도)을 확인해 주세요.`;
+  });
+
+  // 메일 링크로 들어온 뒤 새 비밀번호 정하기
+  $('#reset-form').addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const form = new FormData(event.target);
+    error.textContent = '';
+    if (form.get('password') !== form.get('confirm')) {
+      error.textContent = '새 비밀번호 확인이 일치하지 않아요.';
+      return;
+    }
+    if (String(form.get('password')).length < 8) {
+      error.textContent = '비밀번호는 8자 이상이어야 해요.';
+      return;
+    }
+    busy(event.target, true);
+    try {
+      const { error: failure } = await sb.auth.updateUser({ password: form.get('password') });
+      if (failure) throw new Error(failure.code === 'same_password' ? '예전과 다른 비밀번호를 써 주세요.' : `비밀번호를 바꾸지 못했어요. (${failure.message})`);
+      const { data } = await sb.auth.getSession();
+      await api('POST', '/auth/session', { accessToken: data.session.access_token });
+      location.replace('/');
+    } catch (err) {
+      error.textContent = err.message;
       busy(event.target, false);
     }
   });
@@ -248,7 +325,7 @@ function showLogin(message = '') {
     const form = new FormData(event.target);
     error.textContent = '';
     if (form.get('password') !== form.get('confirm')) {
-      error.textContent = '비밀번호 확인이 달라.';
+      error.textContent = '비밀번호 확인이 일치하지 않아요.';
       return;
     }
     busy(event.target, true);
@@ -399,8 +476,15 @@ function openAccountMenu(anchor) {
         state.notify = true;
       } else state.notify = false;
       localStorage.setItem('chat:notify', state.notify ? 'on' : 'off');
-      toast(state.notify ? '알림을 켰어.' : '알림을 껐어.');
+      toast(state.notify ? '알림을 켰어요.' : '알림을 껐어요.');
     }),
+    menuItem('🖼 프로필 사진 바꾸기', () => { closePopover(); pickAvatar(); }),
+    me.avatar ? menuItem('🗑 프로필 사진 삭제', run(async () => {
+      closePopover();
+      state.me = { ...state.me, ...(await api('PUT', '/api/me/avatar', { path: null })) };
+      renderTopbar();
+      toast('프로필 사진을 삭제했어요.');
+    })) : null,
     menuItem('👤 이름 바꾸기', () => { closePopover(); openProfile(); }),
     menuItem('🔑 비밀번호 바꾸기', () => { closePopover(); openPassword(); }),
     menuItem('↪ 로그아웃', run(async () => {
@@ -411,6 +495,39 @@ function openAccountMenu(anchor) {
   ], { align: 'right' });
 }
 
+/** 사진을 골라 가운데를 정사각형으로 잘라 256px로 줄인 다음, Storage에 직접 올린다. */
+function pickAvatar() {
+  const input = h('input', { type: 'file', accept: 'image/png,image/jpeg,image/webp,image/gif', hidden: true });
+  input.addEventListener('change', run(async () => {
+    const file = input.files?.[0];
+    input.remove();
+    if (!file) return;
+    if (file.size > 20 * 1024 * 1024) throw new Error('사진이 너무 커요. 20MB 이하로 골라 주세요.');
+    const blob = await squareImage(file, 256);
+    const { upload } = await api('POST', '/api/me/avatar', { mime: blob.type, size: blob.size });
+    const { error } = await sb.storage.from(upload.bucket).uploadToSignedUrl(upload.path, upload.token, blob, { contentType: upload.contentType });
+    if (error) throw new Error(`사진을 올리지 못했어요 (${error.message})`);
+    state.me = { ...state.me, ...(await api('PUT', '/api/me/avatar', { path: upload.path })) };
+    renderTopbar();
+    toast('프로필 사진을 바꿨어요.');
+  }));
+  document.body.append(input);
+  input.click();
+}
+
+async function squareImage(file, size) {
+  const bitmap = await createImageBitmap(file).catch(() => {
+    throw new Error('이 사진은 열 수 없어요. 다른 사진을 골라 주세요.');
+  });
+  const side = Math.min(bitmap.width, bitmap.height);
+  const canvas = document.createElement('canvas');
+  canvas.width = canvas.height = size;
+  canvas.getContext('2d').drawImage(bitmap, (bitmap.width - side) / 2, (bitmap.height - side) / 2, side, side, 0, 0, size, size);
+  return new Promise((resolve, reject) => {
+    canvas.toBlob((blob) => (blob ? resolve(blob) : reject(new Error('사진을 처리하지 못했어요.'))), 'image/jpeg', 0.9);
+  });
+}
+
 function openProfile() {
   const input = h('input', { maxlength: 40, value: state.me.name, required: true, autocomplete: 'name' });
   openDialog('이름 바꾸기', [h('label', {}, '이름(실명)', input)], {
@@ -418,7 +535,7 @@ function openProfile() {
     onSubmit: async () => {
       state.me = { ...state.me, ...(await api('PATCH', '/api/me', { name: input.value })) };
       renderTopbar();
-      toast('이름을 바꿨어.');
+      toast('이름을 바꿨어요.');
     },
   });
 }
@@ -431,13 +548,13 @@ function openPassword() {
     h('label', {}, '지금 비밀번호', current),
     h('label', {}, '새 비밀번호', next),
     h('label', {}, '새 비밀번호 확인', confirm),
-    h('p', { class: 'muted' }, '바꾸면 다른 기기에서는 로그아웃돼.'),
+    h('p', { class: 'muted' }, '비밀번호를 바꾸면 다른 기기에서는 로그아웃돼요.'),
   ], {
     submitLabel: '바꾸기',
     onSubmit: async () => {
-      if (next.value !== confirm.value) throw new Error('새 비밀번호 확인이 달라.');
+      if (next.value !== confirm.value) throw new Error('새 비밀번호 확인이 일치하지 않아요.');
       await api('POST', '/api/me/password', { currentPassword: current.value, newPassword: next.value });
-      toast('비밀번호를 바꿨어.');
+      toast('비밀번호를 바꿨어요.');
     },
   });
 }
@@ -593,13 +710,13 @@ function openNewMenu(anchor) {
 function openNewChat() {
   const picker = peoplePicker({ exclude: [state.me.id] });
   openDialog('새 채팅', [
-    h('p', { class: 'muted' }, '한 명을 고르면 1:1 채팅, 여러 명을 고르면 그룹 채팅이 돼. 아직 가입 안 한 사람은 이메일 주소로 초대할 수 있어.'),
+    h('p', { class: 'muted' }, '한 명을 고르면 1:1 채팅, 여러 명을 고르면 그룹 채팅이 돼요. 아직 가입하지 않은 분은 이메일 주소로 초대할 수 있어요.'),
     picker.element,
   ], {
     submitLabel: '채팅 시작',
     onSubmit: async () => {
       const emails = picker.emails();
-      if (!emails.length) throw new Error('대화할 사람을 골라 줘.');
+      if (!emails.length) throw new Error('대화할 사람을 골라 주세요.');
       const conversation = await api('POST', '/api/conversations/direct', { emails });
       await refreshConversations();
       go(`#/chat/${conversation.id}`);
@@ -649,7 +766,7 @@ function openBrowseSpaces() {
   const list = h('ul', { class: 'browse-list' });
   const load = run(async () => {
     const spaces = await api('GET', `/api/spaces/browse?q=${encodeURIComponent(search.value)}`);
-    if (!spaces.length) return list.replaceChildren(h('li', { class: 'empty' }, '참여할 수 있는 공개 스페이스가 없어.'));
+    if (!spaces.length) return list.replaceChildren(h('li', { class: 'empty' }, '참여할 수 있는 공개 스페이스가 없어요.'));
     list.replaceChildren(...spaces.map((s) => h('li', {},
       spaceAvatar(s, 40),
       h('div', { class: 'who' }, h('strong', {}, s.name), h('span', { class: 'muted' }, `멤버 ${s.memberCount}명${s.description ? ` · ${s.description}` : ''}`)),
@@ -690,7 +807,7 @@ const refreshSoon = () => {
 
 function preview(conversation) {
   const last = conversation.lastMessage;
-  if (!last) return conversation.kind === 'space' ? conversation.description || '새 스페이스' : '대화를 시작해 봐';
+  if (!last) return conversation.kind === 'space' ? conversation.description || '새 스페이스' : '대화를 시작해 보세요';
   if (last.deleted) return '삭제된 메시지';
   const body = parseBody(last.body).map(plain).join('').replace(/\s+/g, ' ').trim() || '📎 파일';
   if (last.kind === 'system') return body;
@@ -699,11 +816,16 @@ function preview(conversation) {
 }
 
 /** 목록 미리보기용: 서식 기호 없이 글자만. */
-function plain(token) {
-  if (token.type === 'mention') return token.id === 'all' ? '@all' : '@…';
+function plain(token, mentions = {}) {
+  if (token.type === 'mention') return token.id === 'all' ? '@all' : `@${mentions[token.id] ?? '…'}`;
   if (token.type === 'link') return token.href;
-  if (token.children) return token.children.map(plain).join('');
+  if (token.children) return token.children.map((t) => plain(t, mentions)).join('');
   return token.text;
+}
+
+/** 미리보기(고정 띠, 인용, 전달)에 쓰는 한 줄짜리 글: 서식 기호를 빼고 멘션은 이름으로. */
+function plainText(body, mentions) {
+  return parseBody(body ?? '').map((t) => plain(t, mentions)).join('').replace(/\s+/g, ' ').trim();
 }
 
 function navEntry(conversation) {
@@ -735,7 +857,7 @@ function renderNav() {
     $(`.nav-section-head[data-section="${key}"]`).classList.toggle('collapsed', collapsed);
     // 접혀 있어도 안 읽은 대화와 지금 보고 있는 대화는 보여 준다.
     const shown = collapsed ? items.filter((c) => c.unread || (state.view.type === 'conversation' && state.view.id === c.id)) : items;
-    $(el).replaceChildren(...(shown.length || collapsed ? shown.map(navEntry) : [h('li', { class: 'nav-empty' }, key === 'dms' ? '아직 채팅이 없어' : '아직 스페이스가 없어')]));
+    $(el).replaceChildren(...(shown.length || collapsed ? shown.map(navEntry) : [h('li', { class: 'nav-empty' }, key === 'dms' ? '아직 채팅이 없어요' : '아직 스페이스가 없어요')]));
   }
 
   for (const item of document.querySelectorAll('.nav-item[data-view]')) {
@@ -758,11 +880,11 @@ function renderMain() {
   const main = $('#main');
   const { type } = state.view;
   if (type === 'home') return renderHome(main);
-  if (type === 'mentions') return renderMessageCollection(main, '멘션', '나를 @멘션한 메시지가 여기에 모여.', () => api('GET', '/api/mentions'));
-  if (type === 'starred') return renderMessageCollection(main, '별표표시됨', '메시지에 ☆를 누르면 여기에 모아 둘 수 있어.', () => api('GET', '/api/starred'));
+  if (type === 'mentions') return renderMessageCollection(main, '멘션', '나를 @멘션한 메시지가 여기에 모여요.', () => api('GET', '/api/mentions'));
+  if (type === 'starred') return renderMessageCollection(main, '별표표시됨', '메시지에 ☆를 누르면 여기에 모아 둘 수 있어요.', () => api('GET', '/api/starred'));
   if (type === 'search') {
     $('#search-input').value = state.view.q;
-    return renderMessageCollection(main, `“${state.view.q}” 검색 결과`, '찾는 메시지가 없어.', () => api('GET', `/api/search?q=${encodeURIComponent(state.view.q)}`));
+    return renderMessageCollection(main, `“${state.view.q}” 검색 결과`, '찾는 메시지가 없어요.', () => api('GET', `/api/search?q=${encodeURIComponent(state.view.q)}`));
   }
   return undefined;
 }
@@ -784,8 +906,8 @@ function renderHome(main) {
         c.unread && !c.muted ? h('span', { class: 'badge' }, c.unread) : null))))
       : h('div', { class: 'empty-state' },
         h('img', { src: '/icon.svg', alt: '' }),
-        h('h2', {}, unreadOnly ? '다 읽었어!' : '대화를 시작해 봐'),
-        h('p', { class: 'muted' }, unreadOnly ? '읽지 않은 대화가 없어.' : '왼쪽 위 “새 채팅”으로 친구에게 말을 걸거나 스페이스를 만들어 봐.'),
+        h('h2', {}, unreadOnly ? '모두 읽었어요!' : '대화를 시작해 보세요'),
+        h('p', { class: 'muted' }, unreadOnly ? '읽지 않은 대화가 없어요.' : '왼쪽 위 “새 채팅”으로 친구에게 말을 걸거나 스페이스를 만들어 보세요.'),
         unreadOnly ? null : h('button', { class: 'btn', onclick: openNewChat }, '새 채팅')),
   );
 }
@@ -819,7 +941,7 @@ function memberSummary(conversation) {
     const presence = presenceOf(other.id);
     const parts = [STATUS_LABEL[presence]];
     if (other.statusText) parts.push(other.statusText);
-    if (!other.registered) parts.push('아직 가입하지 않음 — 이 이메일로 가입하면 메시지를 볼 수 있어');
+    if (!other.registered) parts.push('아직 가입하지 않음 — 이 이메일로 가입하면 메시지를 볼 수 있어요');
     return parts.join(' · ');
   }
   return `멤버 ${conversation.members.length}명${conversation.kind === 'space' && conversation.description ? ` · ${conversation.description}` : ''}`;
@@ -849,9 +971,9 @@ function openConversationMenu(anchor, conversation) {
   });
   const items = [
     menuItem(conversation.pinned ? '📌 고정 해제' : '📌 고정', prefs({ pinned: !conversation.pinned })),
-    menuItem(conversation.muted ? '🔔 알림 켜기' : '🔕 알림 끄기', prefs({ muted: !conversation.muted }, conversation.muted ? '알림을 켰어.' : '이 대화의 알림을 껐어. @멘션은 계속 알려 줄게.')),
+    menuItem(conversation.muted ? '🔔 알림 켜기' : '🔕 알림 끄기', prefs({ muted: !conversation.muted }, conversation.muted ? '알림을 켰어요.' : '이 대화의 알림을 껐어요. @멘션은 계속 알려 드려요.')),
     menuItem('🙈 대화 숨기기', run(async () => {
-      await prefs({ hidden: true }, '대화를 숨겼어. 새 메시지가 오면 다시 보여.')();
+      await prefs({ hidden: true }, '대화를 숨겼어요. 새 메시지가 오면 다시 보여요.')();
       go('#/home');
     })),
   ];
@@ -864,7 +986,7 @@ function openConversationMenu(anchor, conversation) {
   if (conversation.kind !== 'dm') {
     items.push(h('hr'), menuItem(conversation.kind === 'space' ? '🚪 스페이스 나가기' : '🚪 그룹 채팅 나가기', () => {
       closePopover();
-      confirmDialog('나가기', `'${conversation.name}'에서 나갈까? 다시 들어오려면 초대를 받아야 할 수 있어.`, '나가기', async () => {
+      confirmDialog('나가기', `'${conversation.name}'에서 나갈까요? 다시 들어오려면 초대를 받아야 할 수 있어요.`, '나가기', async () => {
         await api('DELETE', `/api/conversations/${conversation.id}/members/${state.me.id}`);
         await refreshConversations();
         go('#/home');
@@ -874,7 +996,7 @@ function openConversationMenu(anchor, conversation) {
   if (conversation.kind === 'space' && conversation.role === 'manager') {
     items.push(menuItem('🗑 스페이스 삭제', () => {
       closePopover();
-      confirmDialog('스페이스 삭제', `'${conversation.name}'와 그 안의 모든 메시지와 파일이 모두에게서 영구히 사라져.`, '삭제', async () => {
+      confirmDialog('스페이스 삭제', `'${conversation.name}'와 그 안의 모든 메시지, 파일이 모두에게서 영구히 삭제돼요.`, '삭제', async () => {
         await api('DELETE', `/api/conversations/${conversation.id}`);
         await refreshConversations();
         go('#/home');
@@ -941,7 +1063,7 @@ function openMembers(conversationId) {
     submitLabel: '추가',
     onSubmit: async () => {
       const emails = picker.emails();
-      if (!emails.length) throw new Error('추가할 사람을 골라 줘.');
+      if (!emails.length) throw new Error('추가할 사람을 골라 주세요.');
       await api('POST', `/api/conversations/${conversationId}/members`, { emails });
       await refreshConversations();
       openMembers(conversationId);
@@ -965,7 +1087,7 @@ function searchInConversation(conversation) {
         class: 'collection-item',
         onclick: () => { state.highlight = m.id; $('#dialog').close(); if (!m.threadId) setTimeout(() => scrollToMessage(m.id), 0); },
       }, h('div', { class: 'msg-head' }, h('strong', {}, m.author?.name), h('span', { class: 'muted' }, fullFormat.format(m.createdAt))),
-      h('div', { class: 'msg-body' }, renderBody(m.body, m.mentions, state.me.id))))) : [h('li', { class: 'empty' }, '찾는 메시지가 없어.')]));
+      h('div', { class: 'msg-body' }, renderBody(m.body, m.mentions, state.me.id))))) : [h('li', { class: 'empty' }, '찾는 메시지가 없어요.')]));
     }), 200);
   });
   openDialog('대화에서 검색', [input, results], { wide: true });
@@ -978,6 +1100,7 @@ async function openConversation(id) {
   const scroller = h('div', { class: 'scroller', id: 'scroller' }, list);
   main.replaceChildren(
     h('header', { class: 'conv-head' }),
+    h('div', { id: 'pin-banner' }),
     scroller,
     h('div', { class: 'typing-line', id: 'typing-main' }),
     composer({ conversationId: id, threadId: null }),
@@ -1000,6 +1123,7 @@ async function openConversation(id) {
   if (state.highlight) scrollToMessage(state.highlight);
   else scroller.scrollTop = scroller.scrollHeight;
   renderTyping(id);
+  renderPinBanner(id);
   markActiveRead();
   main.querySelector('.composer textarea')?.focus();
 }
@@ -1061,10 +1185,10 @@ function renderMessages(id) {
 function conversationIntro(conversation) {
   if (!conversation) return null;
   const text = conversation.kind === 'space'
-    ? `${dayLabel(conversation.createdAt)}에 만든 스페이스야. 여기서 이야기를 나누고, 파일을 공유하고, 스레드로 답장할 수 있어.`
+    ? `${createdLabel(conversation.createdAt)} 만든 스페이스예요. 여기서 이야기를 나누고, 파일을 공유하고, 스레드로 답장할 수 있어요.`
     : conversation.kind === 'group'
-      ? '그룹 채팅의 시작이야.'
-      : `${conversation.name}님과 나눈 대화의 시작이야.`;
+      ? '그룹 채팅이 시작됐어요.'
+      : `${conversation.name}님과의 대화가 시작됐어요.`;
   return h('li', { class: 'intro' }, groupAvatar(conversation, 64), h('h2', {}, conversation.name), h('p', { class: 'muted' }, text));
 }
 
@@ -1088,8 +1212,18 @@ function messageItem(message, { compact = false, inThread = false } = {}) {
   const canDelete = mine || (conversation?.kind === 'space' && conversation.role === 'manager');
 
   const body = message.deleted
-    ? h('div', { class: 'msg-body deleted' }, '🚫 삭제된 메시지야.')
+    ? h('div', { class: 'msg-body deleted' }, '🚫 삭제된 메시지예요.')
     : h('div', { class: 'msg-body' }, renderBody(message.body, message.mentions, state.me.id));
+
+  const forwarded = message.forwardedFrom && !message.deleted
+    ? h('div', { class: 'forwarded' }, `↪ 전달된 메시지 · 원래 작성자 ${message.forwardedFrom}`)
+    : null;
+
+  const quote = message.quote && !message.deleted
+    ? h('button', { class: 'quote', type: 'button', title: '원래 메시지로 이동', onclick: () => scrollToMessage(message.quote.id) },
+      h('strong', {}, message.quote.author),
+      h('span', { class: 'quote-body' }, message.quote.deleted ? '삭제된 메시지예요.' : (plainText(message.quote.body) || `📎 파일 ${message.quote.files}개`)))
+    : null;
 
   const attachments = message.attachments.length
     ? h('div', { class: 'attachments' }, message.attachments.map((a) => (a.mime.startsWith('image/') && a.mime !== 'image/svg+xml'
@@ -1123,13 +1257,16 @@ function messageItem(message, { compact = false, inThread = false } = {}) {
     h('button', { class: 'icon-btn', title: '더보기', onclick: (event) => popover(event.currentTarget, [
       menuItem('📋 텍스트 복사', () => {
         closePopover();
-        navigator.clipboard?.writeText(toEditable(message.body, message.mentions)).then(() => toast('복사했어.'));
+        navigator.clipboard?.writeText(toEditable(message.body, message.mentions)).then(() => toast('복사했어요.'));
       }),
       !inThread && !message.threadId ? menuItem('💬 스레드에서 답장', () => { closePopover(); go(`#/chat/${message.conversationId}/${message.id}`); }) : null,
+      menuItem('↩ 인용해서 답장', () => { closePopover(); startQuote(message, inThread); }),
+      menuItem('↪ 다른 대화로 전달', () => { closePopover(); openForward(message); }),
+      menuItem(message.pinned ? '📌 고정 해제' : '📌 이 메시지 고정', () => { closePopover(); togglePin(message); }),
       mine ? menuItem('✏️ 수정', () => { closePopover(); startEdit(message); }) : null,
       canDelete ? menuItem('🗑 삭제', () => {
         closePopover();
-        confirmDialog('메시지 삭제', '이 메시지를 모두에게서 삭제할까?', '삭제', () => api('DELETE', `/api/messages/${message.id}`).then(applyMessageUpdate));
+        confirmDialog('메시지 삭제', '이 메시지를 모두에게서 삭제할까요?', '삭제', () => api('DELETE', `/api/messages/${message.id}`).then(applyMessageUpdate));
       }, { danger: true }) : null,
     ].filter(Boolean), { align: 'right' }) }, '⋮'));
 
@@ -1138,10 +1275,94 @@ function messageItem(message, { compact = false, inThread = false } = {}) {
     h('div', { class: 'msg-main' },
       compact ? null : h('div', { class: 'msg-head' },
         h('strong', {}, message.author?.name ?? '알 수 없음'),
-        h('span', { class: 'muted', title: fullFormat.format(message.createdAt) }, timeFormat.format(message.createdAt))),
+        h('span', { class: 'muted', title: fullFormat.format(message.createdAt) }, timeFormat.format(message.createdAt)),
+        message.pinned ? h('span', { class: 'pin-mark', title: '고정된 메시지' }, '📌') : null),
+      compact && message.pinned ? h('span', { class: 'pin-mark', title: '고정된 메시지' }, '📌') : null,
+      forwarded,
+      quote,
       h('div', { class: 'msg-content' }, body, message.editedAt && !message.deleted ? h('span', { class: 'muted edited' }, '(수정됨)') : null),
       attachments, reactions, replies),
     toolbar);
+}
+
+/** 메시지 입력창: 인용 답장을 걸 수 있게 대화(또는 스레드)별로 기억해 둔다. */
+const composers = new Map();
+
+function startQuote(message, inThread) {
+  const key = inThread ? (message.threadId ?? message.id) : message.conversationId;
+  composers.get(key)?.setQuote(message);
+}
+
+const togglePin = run(async (message) => {
+  const updated = await api('POST', `/api/messages/${message.id}/pin`);
+  applyMessageUpdate(updated);
+  toast(updated.pinned ? '메시지를 고정했어요.' : '고정을 해제했어요.');
+  renderPinBanner(message.conversationId, { force: true });
+});
+
+function openForward(message) {
+  const search = h('input', { type: 'search', placeholder: '대화 이름으로 찾기' });
+  const comment = h('input', { maxlength: 4000, placeholder: '함께 보낼 말 (선택)' });
+  const list = h('ul', { class: 'forward-list' });
+  let target = null;
+  const render = () => {
+    const q = search.value.trim().toLowerCase();
+    const items = [...state.conversations.values()]
+      .filter((c) => !q || c.name.toLowerCase().includes(q))
+      .sort((a, b) => b.lastMessageAt - a.lastMessageAt);
+    list.replaceChildren(...(items.length ? items.map((c) => h('li', {},
+      h('label', { class: `forward-item${target === c.id ? ' on' : ''}` },
+        h('input', { type: 'radio', name: 'forward-target', value: c.id, checked: target === c.id, onchange: () => { target = c.id; render(); } }),
+        groupAvatar(c, 32), h('span', { class: 'who' }, h('strong', {}, c.name), h('span', { class: 'muted' }, c.kind === 'space' ? '스페이스' : c.kind === 'group' ? '그룹 채팅' : '1:1 채팅')))))
+      : [h('li', { class: 'empty' }, '찾는 대화가 없어요.')]));
+  };
+  search.addEventListener('input', render);
+  render();
+  openDialog('메시지 전달', [
+    h('div', { class: 'forward-preview' }, h('strong', {}, message.author?.name ?? ''), h('span', {}, plainText(message.body, message.mentions) || `📎 파일 ${message.attachments.length}개`)),
+    search, list, comment,
+  ], {
+    wide: true,
+    submitLabel: '전달하기',
+    onSubmit: async () => {
+      if (!target) throw new Error('전달할 대화를 골라 주세요.');
+      await api('POST', `/api/messages/${message.id}/forward`, { conversationId: target, comment: comment.value });
+      toast('메시지를 전달했어요.');
+      refreshSoon();
+    },
+  });
+}
+
+/** 대화 위쪽의 고정 메시지 띠. 누르면 고정된 메시지 목록이 열린다. */
+const renderPinBanner = run(async (conversationId, { force = false } = {}) => {
+  const holder = document.querySelector('#pin-banner');
+  if (!holder || state.view.id !== conversationId) return;
+  // 대화를 열 때는 고정된 게 있을 때만 불러오고, 고정/해제 직후에는 항상 새로 불러온다.
+  const known = state.conversations.get(conversationId)?.pinnedCount;
+  const pins = force || known ? await api('GET', `/api/conversations/${conversationId}/pins`) : [];
+  if (state.view.id !== conversationId) return;
+  if (!pins.length) return holder.replaceChildren();
+  const [latest] = pins;
+  holder.replaceChildren(h('button', { class: 'pin-banner', type: 'button', onclick: () => openPins(conversationId, pins) },
+    h('span', { class: 'pin-icon' }, '📌'),
+    h('span', { class: 'who' },
+      h('strong', {}, pins.length > 1 ? `고정된 메시지 ${pins.length}개` : '고정된 메시지'),
+      h('span', { class: 'muted' }, `${latest.author?.name ?? ''}: ${plainText(latest.body, latest.mentions) || '📎 파일'}`))));
+});
+
+function openPins(conversationId, pins) {
+  const list = h('ul', { class: 'collection compact' }, pins.map((m) => h('li', {}, h('div', { class: 'collection-item' },
+    h('div', { class: 'msg-head' }, h('strong', {}, m.author?.name ?? ''), h('span', { class: 'muted' }, fullFormat.format(m.createdAt))),
+    h('div', { class: 'msg-body' }, renderBody(m.body, m.mentions, state.me.id) , m.attachments.length ? ` 📎 ${m.attachments.map((a) => a.filename).join(', ')}` : ''),
+    h('div', { class: 'pin-actions' },
+      h('span', { class: 'muted' }, m.pinnedBy ? `${m.pinnedBy}님이 고정` : ''),
+      h('button', { type: 'button', class: 'btn text', onclick: () => {
+        $('#dialog').close();
+        if (m.threadId) go(`#/chat/${conversationId}/${m.threadId}`);
+        else scrollToMessage(m.id);
+      } }, '메시지로 이동'),
+      h('button', { type: 'button', class: 'btn text', onclick: async () => { $('#dialog').close(); await togglePin(m); } }, '고정 해제'))))));
+  openDialog('고정된 메시지', [list], { wide: true });
 }
 
 const react = run(async (messageId, emoji) => {
@@ -1151,7 +1372,7 @@ const react = run(async (messageId, emoji) => {
 const star = run(async (message) => {
   const updated = await api('POST', `/api/messages/${message.id}/star`);
   applyMessageUpdate(updated);
-  toast(updated.starred ? '별표표시했어.' : '별표를 해제했어.');
+  toast(updated.starred ? '별표표시했어요.' : '별표를 해제했어요.');
 });
 
 function startEdit(message) {
@@ -1230,7 +1451,7 @@ function renderThreadMessages() {
   const [root, ...replies] = state.thread.list;
   if (!root) return;
   const items = [messageItem(root, { inThread: true }),
-    h('li', { class: 'day-sep thread-count' }, h('span', {}, replies.length ? `답글 ${replies.length}개` : '아직 답글이 없어'))];
+    h('li', { class: 'day-sep thread-count' }, h('span', {}, replies.length ? `답글 ${replies.length}개` : '아직 답글이 없어요'))];
   let prev = null;
   for (const reply of replies) {
     items.push(messageItem(reply, { compact: continues(prev, reply), inThread: true }));
@@ -1262,6 +1483,20 @@ function composer({ conversationId, threadId }) {
   const tray = h('div', { class: 'attach-tray' });
   const suggest = h('ul', { class: 'mention-suggest', hidden: true });
   const sendBtn = h('button', { class: 'send-btn', type: 'submit', title: '보내기', disabled: true }, '➤');
+  let quoting = null;
+  const quoteBar = h('div', { class: 'quote-bar', hidden: true });
+  const setQuote = (message) => {
+    quoting = message;
+    quoteBar.hidden = !message;
+    if (message) {
+      quoteBar.replaceChildren(
+        h('span', { class: 'quote-label' }, '↩ 인용'),
+        h('span', { class: 'who' }, h('strong', {}, message.author?.name ?? ''), h('span', { class: 'muted' }, plainText(message.body, message.mentions) || '📎 파일')),
+        h('button', { type: 'button', class: 'icon-btn', 'aria-label': '인용 취소', onclick: () => setQuote(null) }, '✕'));
+      textarea.focus();
+    }
+  };
+  composers.set(threadId ?? conversationId, { setQuote });
 
   const updateSend = () => {
     sendBtn.disabled = !textarea.value.trim() && !pending.some((p) => p.id);
@@ -1279,7 +1514,7 @@ function composer({ conversationId, threadId }) {
   const upload = run(async (files) => {
     for (const file of files) {
       if (file.size > 25 * 1024 * 1024) {
-        toast(`${file.name}: 25MB까지 올릴 수 있어.`, { error: true });
+        toast(`${file.name}: 25MB까지 올릴 수 있어요.`, { error: true });
         continue;
       }
       const entry = { name: file.name, id: null };
@@ -1295,7 +1530,7 @@ function composer({ conversationId, threadId }) {
         const { error } = await sb.storage
           .from(target.bucket)
           .uploadToSignedUrl(target.path, target.token, file, { contentType: target.contentType });
-        if (error) throw new Error(`올리지 못했어 (${error.message})`);
+        if (error) throw new Error(`올리지 못했어요 (${error.message})`);
         entry.id = attachment.id;
       } catch (error) {
         pending.splice(pending.indexOf(entry), 1);
@@ -1358,7 +1593,7 @@ function composer({ conversationId, threadId }) {
   };
 
   const send = run(async () => {
-    if (pending.some((p) => !p.id)) return toast('파일을 올리는 중이야. 잠깐만.');
+    if (pending.some((p) => !p.id)) return toast('파일을 올리는 중이에요. 잠시만 기다려 주세요.');
     if (state.conversations.get(conversationId)?.kind !== 'dm') mentionMap.set('all', 'all');
     const body = fromEditable(textarea.value, mentionMap);
     const attachmentIds = pending.map((p) => p.id);
@@ -1366,7 +1601,8 @@ function composer({ conversationId, threadId }) {
     stopTyping();
     sendBtn.disabled = true;
     try {
-      const message = await api('POST', `/api/conversations/${conversationId}/messages`, { body, threadId, attachmentIds });
+      const message = await api('POST', `/api/conversations/${conversationId}/messages`, { body, threadId, attachmentIds, quoteId: quoting?.id ?? null });
+      setQuote(null);
       textarea.value = '';
       pending.length = 0;
       mentionMap.clear();
@@ -1437,6 +1673,7 @@ function composer({ conversationId, threadId }) {
   const form = h('form', { class: 'composer', onsubmit: (event) => { event.preventDefault(); send(); } },
     suggest,
     h('div', { class: 'composer-box' },
+      quoteBar,
       tray,
       textarea,
       h('div', { class: 'composer-tools' },
@@ -1506,7 +1743,7 @@ function notify(message, conversation, mentionedMe) {
   if (message.kind !== 'user') return;
   if (!('Notification' in window) || Notification.permission !== 'granted') return;
   const title = conversation.kind === 'dm' ? message.author.name : `${message.author.name} · ${conversation.name}`;
-  const body = toEditable(message.body, message.mentions) || '📎 파일을 보냈어';
+  const body = plainText(message.body, message.mentions) || '📎 파일을 보냈어요';
   const n = new Notification(title, { body: body.slice(0, 140), icon: message.author.avatar || '/icon.svg', tag: message.conversationId });
   n.onclick = () => {
     window.focus();
@@ -1571,7 +1808,7 @@ function sendTyping(conversationId, threadId, typing) {
 const downloadFile = run(async (attachment) => {
   const { url, filename } = await api('GET', `/api/files/${attachment.id}`);
   const res = await fetch(url);
-  if (!res.ok) throw new Error('파일을 받지 못했어.');
+  if (!res.ok) throw new Error('파일을 받지 못했어요.');
   const href = URL.createObjectURL(await res.blob());
   const link = h('a', { href, download: filename });
   document.body.append(link);
@@ -1617,10 +1854,14 @@ function connectRealtime() {
       refreshSoon();
     },
     'conversations:changed': refreshSoon,
+    'pins:changed': ({ conversationId }) => {
+      refreshSoon();
+      if (state.view.type === 'conversation' && state.view.id === conversationId) renderPinBanner(conversationId, { force: true });
+    },
     'conversation:removed': ({ id }) => {
       state.messages.delete(id);
       if (state.view.type === 'conversation' && state.view.id === id) {
-        toast('이 대화에 더 이상 접근할 수 없어.');
+        toast('이 대화에 더 이상 접근할 수 없어요.');
         go('#/home');
       }
       refreshSoon();
@@ -1655,7 +1896,7 @@ function connectRealtime() {
       state.realtimeUp = up;
       renderTopbar();
       updatePresenceDots(state.me.id);
-      if (!up && everConnected) toast('실시간 연결이 끊겼어. 다시 연결하는 중…');
+      if (!up && everConnected) toast('실시간 연결이 끊겼어요. 다시 연결하는 중이에요…');
     }
   });
 
