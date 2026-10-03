@@ -76,11 +76,21 @@ export class SupabaseGateway {
     if (error) throw new ChatError(502, `파일을 올리지 못했어: ${error.message}`);
   }
 
-  /** download에 파일 이름을 주면 내려받기로, false면 브라우저 안에서 열리게. */
-  async signedUrl(path, { download = false, expiresIn = 60 } = {}) {
-    const { data, error } = await this.admin.storage.from(this.bucket).createSignedUrl(path, expiresIn, { download });
+  /** 브라우저 안에서 바로 여는 파일용 짧은 서명 URL. */
+  async signedUrl(path, { expiresIn = 60 } = {}) {
+    const { data, error } = await this.admin.storage.from(this.bucket).createSignedUrl(path, expiresIn);
     if (error) throw new ChatError(404, '파일을 찾을 수 없어.');
     return data.signedUrl;
+  }
+
+  /**
+   * 파일 내용을 받는다. 내려받기는 서버가 직접 보낸다:
+   * Storage의 download 옵션은 한글 파일 이름을 두 번 인코딩해서 이름이 깨진다.
+   */
+  async download(path) {
+    const { data, error } = await this.admin.storage.from(this.bucket).download(path);
+    if (error || !data) throw new ChatError(404, '파일을 찾을 수 없어.');
+    return Buffer.from(await data.arrayBuffer());
   }
 
   async remove(paths) {

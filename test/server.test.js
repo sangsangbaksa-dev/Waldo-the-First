@@ -197,7 +197,10 @@ test('파일은 Supabase Storage에 올라가고, 대화 멤버만 서명 URL을
   const own = await a.call('GET', upload.body.url);
   assert.equal(own.status, 302);
   assert.match(own.headers.get('location'), /^https:\/\/test\.supabase\.co\/storage\/v1\/object\/sign\//);
-  assert.doesNotMatch(own.headers.get('location'), /download=/);
+  const saved = await a.call('GET', `${upload.body.url}?download`);
+  assert.equal(saved.status, 200);
+  assert.equal(saved.body, 'hello');
+  assert.equal(saved.headers.get('content-disposition'), `attachment; filename*=UTF-8''${encodeURIComponent('사진.png')}`);
   assert.equal((await e.call('GET', upload.body.url)).status, 404);
 
   // HTML 같은 형식은 Storage에 바이너리로 두고, 받을 때는 내려받기로만 준다.
@@ -206,7 +209,10 @@ test('파일은 Supabase Storage에 올라가고, 대화 멤버만 서명 URL을
     'x-filename': 'x.html',
   });
   assert.equal([...supabase.files.values()].at(-1).contentType, 'application/octet-stream');
-  assert.match((await a.call('GET', html.body.url)).headers.get('location'), /download=x\.html/);
+  const served = await a.call('GET', html.body.url);
+  assert.equal(served.status, 200);
+  assert.equal(served.headers.get('content-type'), 'application/octet-stream');
+  assert.match(served.headers.get('content-disposition'), /^attachment; filename\*=UTF-8''x\.html$/);
 
   // 메시지를 지우면 Storage에서도 지운다.
   await a.call('DELETE', `/api/messages/${sent.body.id}`);

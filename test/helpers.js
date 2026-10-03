@@ -51,10 +51,14 @@ export class FakeSupabase {
     this.files.set(path, { buffer, contentType });
   }
 
-  async signedUrl(path, { download = false } = {}) {
+  async signedUrl(path) {
     if (!this.files.has(path)) throw new ChatError(404, '파일을 찾을 수 없어.');
-    const query = download ? `?download=${encodeURIComponent(download)}` : '';
-    return `${this.publicConfig.url}/storage/v1/object/sign/chat-attachments/${path}${query}`;
+    return `${this.publicConfig.url}/storage/v1/object/sign/chat-attachments/${path}?token=t`;
+  }
+
+  async download(path) {
+    if (!this.files.has(path)) throw new ChatError(404, '파일을 찾을 수 없어.');
+    return this.files.get(path).buffer;
   }
 
   async remove(paths) {

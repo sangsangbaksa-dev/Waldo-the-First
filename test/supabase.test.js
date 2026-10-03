@@ -40,6 +40,10 @@ before(async () => {
     if (pathname.startsWith('/storage/v1/object/sign/')) {
       return json(200, { signedURL: `${pathname.replace('/storage/v1', '')}?token=signed` });
     }
+    if (req.method === 'GET' && pathname.startsWith('/storage/v1/object/chat-attachments/')) {
+      res.writeHead(200, { 'content-type': 'application/octet-stream' });
+      return res.end('file-bytes');
+    }
     if (pathname.startsWith('/storage/v1/object/')) return json(200, { Key: pathname, Id: 'x' });
     json(404, { error: 'not found' });
   });
@@ -99,8 +103,8 @@ test('Storage: 비공개 버킷 만들기, 올리기, 서명 URL, 지우기', as
 
   const inline = await gateway.signedUrl('u1/f1');
   assert.match(inline, /\/storage\/v1\/object\/sign\/chat-attachments\/u1\/f1\?token=signed$/);
-  const download = await gateway.signedUrl('u1/f1', { download: '메모.txt' });
-  assert.match(download, /&download=/);
+  assert.equal((await gateway.download('u1/f1')).toString(), 'file-bytes');
+  assert.ok(last((r) => r.method === 'GET' && r.url === '/storage/v1/object/chat-attachments/u1/f1'));
 
   await gateway.remove(['u1/f1']);
   const del = last((r) => r.method === 'DELETE');

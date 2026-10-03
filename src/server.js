@@ -266,13 +266,21 @@ export function createChatServer({ service, supabase, config, signupLimiter }) {
 
   app.use('/api', api);
 
-  // 권한을 확인한 뒤 1분짜리 서명 URL로 보낸다.
+  // 브라우저에서 여는 파일은 권한 확인 뒤 1분짜리 서명 URL로 보내고,
+  // 내려받는 파일은 올바른 파일 이름을 붙여 서버가 직접 보낸다.
   app.get('/files/:id', auth, async (req, res) => {
     const file = await service.attachmentFor(req.user.id, req.params.id);
-    const inline = INLINE_TYPES.test(file.mime) && req.query.download === undefined;
-    const url = await supabase.signedUrl(file.path, { download: inline ? false : file.filename });
-    res.set('Cache-Control', 'private, max-age=30');
-    res.redirect(302, url);
+    if (INLINE_TYPES.test(file.mime) && req.query.download === undefined) {
+      res.set('Cache-Control', 'private, max-age=30');
+      return res.redirect(302, await supabase.signedUrl(file.path));
+    }
+    const content = await supabase.download(file.path);
+    res.set({
+      'Content-Type': 'application/octet-stream',
+      'Content-Disposition': `attachment; filename*=UTF-8''${encodeURIComponent(file.filename)}`,
+      'Cache-Control': 'private, no-store',
+    });
+    res.send(content);
   });
 
   app.use(express.static(publicDir));
