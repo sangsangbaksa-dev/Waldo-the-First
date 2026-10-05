@@ -32,6 +32,31 @@ const ICONS = {
   down: '<path d="M12 5v14M6 13l6 6 6-6"/>',
 };
 
+// Material Icons(Apache 2.0) 모양을 그대로 쓴다.
+const MATERIAL = {
+  menu: 'M3 18h18v-2H3v2zm0-5h18v-2H3v2zm0-7v2h18V6H3z',
+  search: 'M15.5 14h-.79l-.28-.27A6.47 6.47 0 0 0 16 9.5 6.5 6.5 0 1 0 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z',
+  edit: 'M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM5.92 19H5v-.92l9.06-9.06.92.92L5.92 19zM20.71 5.63l-2.34-2.34a.996.996 0 0 0-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83a.996.996 0 0 0 0-1.41z',
+  home: 'M12 5.69l5 4.5V18h-2v-6H9v6H7v-7.81l5-4.5M12 3L2 12h3v8h6v-6h2v6h6v-8h3L12 3z',
+  at: 'M12 1.95c-5.52 0-10 4.48-10 10s4.48 10 10 10h5v-2h-5c-4.34 0-8-3.66-8-8s3.66-8 8-8 8 3.66 8 8v1.43c0 .79-.71 1.57-1.5 1.57s-1.5-.78-1.5-1.57v-1.43c0-2.76-2.24-5-5-5s-5 2.24-5 5 2.24 5 5 5c1.38 0 2.64-.56 3.54-1.47.65.89 1.77 1.47 2.96 1.47 1.97 0 3.5-1.6 3.5-3.57v-1.43c0-5.52-4.48-10-10-10zm0 13c-1.66 0-3-1.34-3-3s1.34-3 3-3 3 1.34 3 3-1.34 3-3 3z',
+  star: 'M22 9.24l-7.19-.62L12 2 9.19 8.63 2 9.24l5.46 4.73L5.82 21 12 17.27 18.18 21l-1.63-7.03L22 9.24zM12 15.4l-3.76 2.27 1-4.28-3.32-2.88 4.38-.38L12 6.1l1.71 4.04 4.38.38-3.32 2.88 1 4.28L12 15.4z',
+  starFilled: 'M12 17.27L18.18 21l-1.64-7.03L22 9.24l-7.19-.61L12 2 9.19 8.63 2 9.24l5.46 4.73L5.82 21z',
+  more: 'M12 8c1.1 0 2-.9 2-2s-.9-2-2-2-2 .9-2 2 .9 2 2 2zm0 2c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2zm0 6c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2z',
+  caret: 'M16.59 8.59L12 13.17 7.41 8.59 6 10l6 6 6-6z',
+  group: 'M16 11c1.66 0 2.99-1.34 2.99-3S17.66 5 16 5c-1.66 0-3 1.34-3 3s1.34 3 3 3zm-8 0c1.66 0 2.99-1.34 2.99-3S9.66 5 8 5C6.34 5 5 6.34 5 8s1.34 3 3 3zm0 2c-2.33 0-7 1.17-7 3.5V19h14v-2.5c0-2.33-4.67-3.5-7-3.5zm8 0c-.29 0-.62.02-.97.05 1.16.84 1.97 1.97 1.97 3.45V19h6v-2.5c0-2.33-4.67-3.5-7-3.5z',
+  thread: 'M20 2H4c-1.1 0-2 .9-2 2v18l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm0 14H6l-2 2V4h16v12z',
+  explore: 'M12 10.9c-.61 0-1.1.49-1.1 1.1s.49 1.1 1.1 1.1c.61 0 1.1-.49 1.1-1.1s-.49-1.1-1.1-1.1zM12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm2.19 12.19L6 18l3.81-8.19L18 6l-3.81 8.19z',
+  file: 'M14 2H6c-1.1 0-1.99.9-1.99 2L4 20c0 1.1.89 2 1.99 2H18c1.1 0 2-.9 2-2V8l-6-6zm2 16H8v-2h8v2zm0-4H8v-2h8v2zm-3-5V3.5L18.5 9H13z',
+  close: 'M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z',
+};
+
+/** Material 아이콘 하나를 그린다(고정된 모양만 쓴다). */
+function mi(name, size = 20) {
+  const span = h('span', { class: 'mi', 'aria-hidden': 'true' });
+  span.innerHTML = `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="currentColor"><path d="${MATERIAL[name]}"/></svg>`;
+  return span;
+}
+
 /** 고정된 SVG 아이콘(외부 입력이 들어가지 않는다). */
 function icon(name, size = 20) {
   const span = h('span', { class: 'svg-icon', 'aria-hidden': 'true' });
@@ -171,6 +196,8 @@ const EMOJIS = [
   '👍', '👎', '👏', '🙌', '🙏', '💪', '👀', '🤝', '✌️', '👋', '❤️', '🧡', '💛', '💚', '💙', '💜',
   '🔥', '✨', '🎉', '💯', '✅', '❌', '⭐', '☕', '🍕', '🎂', '📌', '📎', '💡', '📚', '⏰', '🚀',
 ];
+document.querySelectorAll('[data-icon]').forEach((el) => el.replaceWith(mi(el.dataset.icon, Number(el.dataset.size) || 20)));
+
 const SPACE_EMOJIS = ['💬', '📚', '🎮', '🎵', '⚽', '🍔', '💼', '🧪', '🎨', '🌱', '🏫', '🚀'];
 
 // ───────────── 상태 ─────────────
@@ -636,7 +663,7 @@ function openDialog(title, body, { submitLabel, onSubmit, danger = false, wide =
   const dialog = $('#dialog');
   const error = h('p', { class: 'error', role: 'alert' });
   const form = h('form', { method: 'dialog', class: 'dialog-form' },
-    h('header', {}, h('h2', {}, title), h('button', { type: 'button', class: 'icon-btn', 'aria-label': '닫기', onclick: () => dialog.close() }, '✕')),
+    h('header', {}, h('h2', {}, title), h('button', { type: 'button', class: 'icon-btn', 'aria-label': '닫기', onclick: () => dialog.close() }, mi('close'))),
     h('div', { class: 'dialog-body' }, body),
     error,
     h('footer', {},
@@ -992,9 +1019,9 @@ function renderConversationHeader(conversation) {
       h('h1', {}, conversation.name),
       h('span', { class: 'muted conv-sub', dataset: { sub: conversation.id } }, memberSummary(conversation))),
     h('div', { class: 'conv-actions' },
-      conversation.kind !== 'dm' ? h('button', { class: 'icon-btn', title: '멤버', onclick: () => openMembers(conversation.id) }, '👥') : null,
-      h('button', { class: 'icon-btn', title: '이 대화에서 검색', onclick: () => searchInConversation(conversation) }, '🔍'),
-      h('button', { class: 'icon-btn', title: '더보기', onclick: (event) => openConversationMenu(event.currentTarget, conversation) }, '⋮')),
+      conversation.kind !== 'dm' ? h('button', { class: 'icon-btn', title: '멤버', 'aria-label': '멤버', onclick: () => openMembers(conversation.id) }, mi('group')) : null,
+      h('button', { class: 'icon-btn', title: '이 대화에서 검색', 'aria-label': '이 대화에서 검색', onclick: () => searchInConversation(conversation) }, mi('search')),
+      h('button', { class: 'icon-btn', title: '더보기', 'aria-label': '더보기', onclick: (event) => openConversationMenu(event.currentTarget, conversation) }, mi('more'))),
   );
 }
 
@@ -1276,7 +1303,7 @@ function messageItem(message, { compact = false, inThread = false } = {}) {
       images.length ? h('div', { class: `att-images n${Math.min(images.length, 4)}` }, images.map((a) => h('a', { href: a.url, target: '_blank', rel: 'noopener', class: 'att-image', title: a.filename },
         h('img', { src: a.url, alt: a.filename, loading: 'lazy' })))) : null,
       files.map((a) => h('a', { href: a.url, class: 'att-file', onclick: (event) => { event.preventDefault(); downloadFile(a); } },
-        h('span', { class: 'att-icon' }, '📄'), h('span', { class: 'who' }, h('strong', {}, a.filename), h('span', { class: 'muted' }, fileSize(a.size))))))
+        h('span', { class: 'att-icon' }, mi('file', 28)), h('span', { class: 'who' }, h('strong', {}, a.filename), h('span', { class: 'muted' }, fileSize(a.size))))))
     : null;
 
   const reactions = message.reactions.length
@@ -1299,8 +1326,8 @@ function messageItem(message, { compact = false, inThread = false } = {}) {
   const toolbar = message.deleted ? null : h('div', { class: 'msg-tools' },
     QUICK_REACTIONS.slice(0, 3).map((e) => h('button', { class: 'icon-btn', title: `${e} 반응`, onclick: () => react(message.id, e) }, e)),
     h('button', { class: 'icon-btn', title: '반응 추가', onclick: (event) => emojiPicker(event.currentTarget, (e) => react(message.id, e)) }, '☺'),
-    !inThread && !message.threadId ? h('button', { class: 'icon-btn', title: '스레드에서 답장', onclick: () => go(`#/chat/${message.conversationId}/${message.id}`) }, '💬') : null,
-    h('button', { class: `icon-btn${message.starred ? ' starred' : ''}`, title: message.starred ? '별표 해제' : '별표', onclick: () => star(message) }, message.starred ? '★' : '☆'),
+    !inThread && !message.threadId ? h('button', { class: 'icon-btn', title: '스레드에서 답장', onclick: () => go(`#/chat/${message.conversationId}/${message.id}`) }, mi('thread', 18)) : null,
+    h('button', { class: `icon-btn${message.starred ? ' starred' : ''}`, title: message.starred ? '별표 해제' : '별표', onclick: () => star(message) }, mi(message.starred ? 'starFilled' : 'star', 18)),
     h('button', { class: 'icon-btn', title: '더보기', onclick: (event) => popover(event.currentTarget, [
       menuItem('📋 텍스트 복사', () => {
         closePopover();
@@ -1315,7 +1342,7 @@ function messageItem(message, { compact = false, inThread = false } = {}) {
         closePopover();
         confirmDialog('메시지 삭제', '이 메시지를 모두에게서 삭제할까요?', '삭제', () => api('DELETE', `/api/messages/${message.id}`).then(applyMessageUpdate));
       }, { danger: true }) : null,
-    ].filter(Boolean), { align: 'right' }) }, '⋮'));
+    ].filter(Boolean), { align: 'right' }) }, mi('more', 18)));
 
   // 글이 없고 파일만 있으면 말풍선은 그리지 않는다.
   const hasText = message.deleted || message.body.trim() || quote;
@@ -1480,7 +1507,7 @@ async function openThread(conversationId, rootId) {
   panel.replaceChildren(
     h('header', { class: 'thread-head' },
       h('div', {}, h('h2', {}, '스레드'), h('span', { class: 'muted' }, conversation?.name)),
-      h('button', { class: 'icon-btn', 'aria-label': '스레드 닫기', onclick: () => go(`#/chat/${conversationId}`) }, '✕')),
+      h('button', { class: 'icon-btn', 'aria-label': '스레드 닫기', onclick: () => go(`#/chat/${conversationId}`) }, mi('close'))),
     h('div', { class: 'scroller', id: 'thread-scroller' }, h('ol', { class: 'messages', id: 'thread-list' }, h('li', { class: 'loading' }, '불러오는 중…'))),
     h('div', { class: 'typing-line', id: 'typing-thread' }),
     composer({ conversationId, threadId: rootId }),
