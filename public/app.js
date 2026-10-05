@@ -1481,7 +1481,7 @@ function applyMessageUpdate(message) {
   const store = state.messages.get(message.conversationId);
   if (store) {
     const index = store.list.findIndex((m) => m.id === message.id);
-    if (index >= 0) store.list[index] = { ...message, starred: keepStar(store.list[index]) };
+    if (index >= 0) store.list[index] = { ...message, starred: keepStar(store.list[index]), replyIds: store.list[index].replyIds };
   }
   if (state.thread?.rootId === message.id || state.thread?.list.some((m) => m.id === message.id)) {
     const index = state.thread.list.findIndex((m) => m.id === message.id);
@@ -1799,7 +1799,17 @@ function receiveMessage(message, { own = false, mentioned = [] } = {}) {
         if (atBottom || own) scroller.scrollTop = scroller.scrollHeight;
       }
     }
-  } else if (state.thread?.rootId === message.threadId && !state.thread.list.some((m) => m.id === message.id)) {
+  } else {
+    // 실시간 연결이 늦어도 원래 메시지의 "답글 N개"가 바로 바뀌게 한다.
+    const root = store?.list.find((m) => m.id === message.threadId);
+    if (root && !(root.replyIds ??= new Set()).has(message.id)) {
+      root.replyIds.add(message.id);
+      const people = root.replies.people.some((p) => p.id === message.author?.id) || !message.author ? root.replies.people : [...root.replies.people, message.author].slice(-3);
+      root.replies = { ...root.replies, count: root.replies.count + 1, people, lastAt: message.createdAt };
+      if (isActive) renderMessages(message.conversationId);
+    }
+  }
+  if (message.threadId && state.thread?.rootId === message.threadId && !state.thread.list.some((m) => m.id === message.id)) {
     state.thread.list.push(message);
     renderThreadMessages();
     const scroller = $('#thread-scroller');

@@ -423,7 +423,7 @@ input:focus, select:focus, textarea:focus { border-color: var(--primary); box-sh
   font-size: 15px;
 }
 .msg.mine .bubble { background: var(--bubble-mine); }
-.bubble.empty { display: none; }
+.bubble.empty:not(:has(.edit-box)) { display: none; }
 .bubble:has(.edit-box) { width: min(520px, 70vw); }
 .msg-body { white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.45; }
 .msg-body.deleted { color: var(--muted); font-style: italic; }
