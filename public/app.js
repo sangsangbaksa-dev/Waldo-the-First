@@ -487,7 +487,7 @@ function bindShell() {
     }
   });
 
-  window.addEventListener('focus', markActiveRead);
+  window.addEventListener('focus', () => { markActiveRead(); refreshSoon(); });
   document.addEventListener('visibilitychange', markActiveRead);
 }
 
@@ -857,9 +857,31 @@ async function refreshConversations() {
   if (state.view.type === 'conversation') {
     const conversation = activeConversation();
     if (!conversation) go('#/home');
-    else renderConversationHeader(conversation);
+    else {
+      renderConversationHeader(conversation);
+      // 실시간 연결로 못 받은 새 메시지(시스템 안내 포함)가 있으면 채운다.
+      const store = state.messages.get(conversation.id);
+      const lastId = conversation.lastMessage?.id;
+      if (store && lastId && !store.list.some((m) => m.id === lastId)) await syncLatest(conversation.id);
+    }
   }
   if (state.view.type === 'home') renderMain();
+}
+
+async function syncLatest(id) {
+  const page = await api('GET', `/api/conversations/${id}/messages`);
+  const store = state.messages.get(id);
+  if (!store) return;
+  const known = new Set(store.list.map((m) => m.id));
+  const fresh = page.messages.filter((m) => !known.has(m.id));
+  if (!fresh.length) return;
+  store.list = [...store.list, ...fresh].sort((x, y) => x.createdAt - y.createdAt);
+  if (state.view.type === 'conversation' && state.view.id === id) {
+    const scroller = $('#scroller');
+    const atBottom = scroller && scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 120;
+    renderMessages(id);
+    if (atBottom) scroller.scrollTop = scroller.scrollHeight;
+  }
 }
 
 let refreshTimer;
@@ -1051,8 +1073,9 @@ function openConversationMenu(anchor, conversation) {
       closePopover();
       confirmDialog('나가기', `'${conversation.name}'에서 나갈까요? 다시 들어오려면 초대를 받아야 할 수 있어요.`, '나가기', async () => {
         await api('DELETE', `/api/conversations/${conversation.id}/members/${state.me.id}`);
-        await refreshConversations();
+        state.messages.delete(conversation.id);
         go('#/home');
+        await refreshConversations();
       });
     }, { danger: true }));
   }
@@ -1554,7 +1577,7 @@ function composer({ conversationId, threadId }) {
   const textarea = h('textarea', {
     rows: 1,
     maxlength: 4000,
-    placeholder: threadId ? '답장' : conversation.kind === 'dm' ? `${conversation.name}님에게 메시지 보내기` : `${conversation.name}에 메시지 보내기`,
+    placeholder: threadId ? '스레드에 답장' : conversation.kind === 'dm' ? `${conversation.name}님에게 메시지 보내기` : conversation.kind === 'space' ? '스페이스에 메시지 보내기' : '그룹에 메시지 보내기',
     'aria-label': '메시지',
   });
   const fileInput = h('input', { type: 'file', multiple: true, hidden: true });
@@ -1846,6 +1869,8 @@ function markActiveRead() {
   if (!conversation || document.visibilityState !== 'visible') return;
   clearTimeout(readTimer);
   readTimer = setTimeout(run(async () => {
+    // 그사이 대화에서 나갔거나 다른 대화로 옮겼으면 읽음 처리하지 않는다.
+    if (activeConversation()?.id !== conversation.id) return;
     await api('POST', `/api/conversations/${conversation.id}/read`);
     conversation.unread = 0;
     conversation.mentionCount = 0;

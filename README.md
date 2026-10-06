@@ -73,7 +73,7 @@ Node.js 22.9 이상이 필요해.
 ```bash
 npm install
 npm start        # http://localhost:3000
-npm test         # 테스트 38개 (Supabase 없이 돌아가)
+npm test         # 테스트 39개 (Supabase 없이 돌아가)
 ```
 처음 켜면 테이블과 버킷이 만들어지고 `채팅 서버: http://localhost:3000`이 나와. 설정이 틀리면 무엇을 고치면 되는지 한국어로 알려 줘.
 

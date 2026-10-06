@@ -18,6 +18,21 @@ export const STATUSES = ['auto', 'away', 'dnd'];
 const MENTION = /<@([0-9a-f-]{36}|all)>/g;
 const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
+/** 이름 끝 글자의 받침에 맞춰 '로'/'으로'를 고른다. */
+export function withRo(word) {
+  const digits = { 0: '으로', 1: '로', 2: '로', 3: '으로', 4: '로', 5: '로', 6: '으로', 7: '로', 8: '로', 9: '로' };
+  for (const ch of [...String(word)].reverse()) {
+    const code = ch.charCodeAt(0);
+    if (code >= 0xac00 && code <= 0xd7a3) {
+      const final = (code - 0xac00) % 28;
+      return final === 0 || final === 8 ? '로' : '으로';
+    }
+    if (ch in digits) return digits[ch];
+    if (/[a-z]/i.test(ch)) return '(으)로';
+  }
+  return '(으)로';
+}
+
 export class ChatError extends Error {
   constructor(status, message) {
     super(message);
@@ -347,7 +362,7 @@ export class ChatService {
     ]);
     if (next.name !== conversation.name) {
       const actor = await this.getUser(userId);
-      await this.systemMessage(conversationId, `${actor.name}님이 스페이스 이름을 '${next.name}'(으)로 바꿨어요.`);
+      await this.systemMessage(conversationId, `${actor.name}님이 스페이스 이름을 '${next.name}'${withRo(next.name)} 바꿨어요.`);
     }
     return this.getConversation(userId, conversationId);
   }
@@ -499,7 +514,7 @@ export class ChatService {
       [row.id, row.last_read_at, userId, row.id, userId, row.last_read_at, row.id],
     );
     const last = await this.db.one(
-      `SELECT m.body, m.kind, m.deleted, u.name FROM chat_messages m LEFT JOIN chat_users u ON u.id = m.user_id
+      `SELECT m.id, m.body, m.kind, m.deleted, u.name FROM chat_messages m LEFT JOIN chat_users u ON u.id = m.user_id
        WHERE m.conversation_id = ? AND m.thread_id IS NULL ORDER BY m.created_at DESC LIMIT 1`,
       [row.id],
     );
@@ -524,7 +539,7 @@ export class ChatService {
       pinnedCount: counts.pins,
       members,
       lastMessage: last
-        ? { author: last.name, body: last.deleted ? '' : last.body, kind: last.kind, deleted: Boolean(last.deleted) }
+        ? { id: last.id, author: last.name, body: last.deleted ? '' : last.body, kind: last.kind, deleted: Boolean(last.deleted) }
         : null,
     };
   }

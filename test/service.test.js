@@ -244,3 +244,13 @@ test('프로필 사진: 경로를 저장하고, 화면에는 권한을 확인하
   const cleared = await service.setAvatar(a.id, null);
   assert.equal(cleared.user.avatar, null);
 });
+
+test('이름 받침에 맞춰 로/으로를 고른다', async () => {
+  const { withRo } = await import('../src/service.js');
+  assert.equal(withRo('폐급'), '으로');
+  assert.equal(withRo('교실'), '로');
+  assert.equal(withRo('우리 반'), '으로');
+  assert.equal(withRo('MSG(맛소금, 미친 학생 그룹)'), '으로');
+  assert.equal(withRo('스터디'), '로');
+  assert.equal(withRo('3반 1'), '로');
+});
